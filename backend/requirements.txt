@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-dotenv
+requests
+python-multipart
+pymupdf
+numpy
+networkx
+pandas
+matplotlib
+rapidocr-onnxruntime
+onnxruntime
