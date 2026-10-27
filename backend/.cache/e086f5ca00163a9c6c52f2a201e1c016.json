@@ -1,0 +1,1 @@
+{"content": "这篇论文（Layer Normalization）的核心贡献是提出了一种不依赖于小批量（mini-batch）统计的归一化方法——层归一化（layer normalization），其方法是直接在单个训练样本内、对某隐藏层中所有神经元的加权输入（summed inputs）计算均值和方差并进行归一化，从而避免引入训练样本间的依赖，适用于RNN、在线学习及大规模分布式训练场景 [来源 Layer Normalization 第2页]。"}

@@ -1,0 +1,1 @@
+{"content": "层归一化（Layer Normalization）在训练和测试阶段执行完全相同的计算。它同样可直接应用于循环神经网络（Recurrent Neural Networks, RNN）。"}
