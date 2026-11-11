@@ -226,8 +226,8 @@ def translate(text, source_lang=None, target_lang=None):
         else:
             source_lang = source_lang or "英文"
             target_lang = target_lang or "中文"
-    sys = f"你是学术翻译专家，把{source_lang}精准翻译成{target_lang}，术语准确、时态严谨，符合学术规范。"
-    prompt = f"请把下面的{source_lang}内容精准翻译成{target_lang}（保持原有章节结构，公式与专有名词保留）：\n\n{text}"
+    sys = f"你是学术翻译专家，把{source_lang}精准翻译成{target_lang}，术语准确、时态严谨，符合学术规范。输出纯文本，禁止任何 Markdown 标记（不要 ** 加粗、不要 # 标题、不要 --- 分隔线、不要列表符号、不要反引号），不要保留原文的 ∗ † 等脚注符号。"
+    prompt = f"请把下面的{source_lang}内容精准翻译成{target_lang}（保持原有段落结构，公式与专有名词保留）：\n\n{text}"
     return chat([{"role": "system", "content": sys}, {"role": "user", "content": prompt}], temperature=0.2)
 
 

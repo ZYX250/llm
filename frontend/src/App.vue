@@ -347,7 +347,7 @@
                 </div></div>
                 <div class="col zh"><div class="col-label">译文（ZH）</div><div class="col-body paper-text" :style="{ fontSize: fontSize+'px' }">
                   <template v-if="readTranslated">
-                    <p v-for="(para, pi) in fmtPars(readTranslated)" :key="'zh'+pi">{{ para }}</p>
+                    <p v-for="(para, pi) in fmtPars(cleanMd(readTranslated))" :key="'zh'+pi">{{ para }}</p>
                   </template>
                   <template v-else>
                     <span v-if="translating">翻译中…</span>
@@ -878,6 +878,19 @@ export default {
     fmtText(t) {
       if (!t) return "";
       return t.split(/\n+/).map(s => s.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n\n");
+    },
+    // 清掉 LLM 译文里的 Markdown 残留与脚注符号（只用于译文列，原文列保留原始标记）
+    cleanMd(t) {
+      if (!t) return "";
+      return t.replace(/\r/g, "")
+        .replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, "")   // 整行的分隔线
+        .replace(/^[ \t]*#{1,6}[ \t]*/gm, "")                    // 标题符号 #
+        .replace(/\*\*/g, "")                                     // 加粗标记
+        .replace(/`{1,3}/g, "")                                   // 反引号
+        .replace(/[∗*†‡§]/g, "")                                  // 脚注符号
+        .replace(/^[ \t]*[-+•][ \t]+/gm, "")                      // 行首列表符
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n");
     },
     // 真正的段落还原：空行=段落边界；段内被 PDF 切开的软换行拼回一行
     fmtPars(t) {
