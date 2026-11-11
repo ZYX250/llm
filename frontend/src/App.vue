@@ -190,7 +190,15 @@
               <li v-for="(h,i) in parse.headings.slice(0,50)" :key="i" :class="'lv'+h.level"><span class="lv-tag">{{ 'H'+h.level }}</span> {{ h.title }} <em>p{{ h.page }}</em></li>
             </ul>
           </div>
-          <div v-if="parseTab==='公式'"><pre class="formula">{{ parse.formulas.slice(0,20).join('\n') || '无' }}</pre></div>
+          <div v-if="parseTab==='公式'">
+            <div v-if="(parse.formulas||[]).length" class="f-list">
+              <div v-for="(f,i) in parse.formulas.slice(0,20)" :key="i" class="f-row">
+                <span class="f-pg">p{{ (parse.formula_pages||[])[i] || '-' }}</span>
+                <pre class="formula f-body">{{ f }}</pre>
+              </div>
+            </div>
+            <pre class="formula" v-else>无</pre>
+          </div>
           <div v-if="parseTab==='表格'">
             <div v-for="(t,i) in parse.tables.slice(0,5)" :key="i"><div class="tbl-caption">p{{ t.page }}</div><table class="tbl"><tr v-for="(row,ri) in t.data" :key="ri"><td v-for="(c,ci) in row" :key="ci">{{ c }}</td></tr></table></div>
           </div>
@@ -1176,6 +1184,10 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .tree .lv-tag { background: #eef; font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-right: 6px; color: #6a6fd0; }
 .tree em { color: #aab; font-style: normal; font-size: 11px; }
 .formula { background: #1e1e2e; color: #e6edf3; padding: 12px; border-radius: 10px; font-size: 12px; white-space: pre-wrap; }
+.f-list { display: flex; flex-direction: column; gap: 8px; }
+.f-row { display: flex; gap: 8px; align-items: stretch; }
+.f-pg { flex: 0 0 44px; font-size: 11px; color: #6b7a99; display: flex; align-items: center; justify-content: flex-end; }
+.f-body { flex: 1; margin: 0; }
 .tbl { border-collapse: collapse; width: 100%; font-size: 12px; margin: 4px 0 10px; }
 .tbl td { border: 1px solid #ddd; padding: 4px 8px; }
 .tbl-caption { color: var(--sub); font-size: 12px; }

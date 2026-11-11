@@ -115,11 +115,96 @@ def _extract_tables(doc):
     return tables
 
 
-def _extract_formulas(text):
-    """粗略抽取 LaTeX 公式（$...$ 或 $$...$$）。"""
-    formulas = re.findall(r"\$\$([^$]+)\$\$|\$([^$]+)\$", text)
-    out = [ (a or b).strip() for a, b in formulas if (a or b).strip() ]
-    return out[:30]
+# TeX/数学字体家族（Computer Modern 与常见数学字体），用于版面启发式识别公式行。
+# 真实 PDF 里的公式不是 $...$ 包裹的，而是用这些字体渲染，所以靠字体比正则可靠。
+MATH_FONT_RE = re.compile(r"(CMR|CMMI|CMSY|CMBX|CMEX|CMSL|MSBM|MSBB|Math|Symbol|Cambria)", re.I)
+MATH_RATIO_MIN = 0.6   # 行内数学字体字符占比达到该阈值才纳入候选
+MERGE_GAP_PT = 26      # 上标/分母常被 PDF 拆成独立行，垂直间距小于该值则并入上一条
+
+
+def _is_math_font(name):
+    """判断字体是否属于 TeX/数学字体家族（CMMI/CMR/CMSY/CMBX…）。"""
+    return bool(MATH_FONT_RE.search(name or ""))
+
+
+def _font_formula_lines(doc):
+    """基于 span 字体与坐标的版面启发式抽公式行。
+
+    判定三步：
+    1) 行内数学字体字符占比 ≥ MATH_RATIO_MIN（正文用 NimbusRom/Roman，占比极低）；
+    2) 相邻行垂直间距小则合并（公式的上标、分母、根号常被拆成独立行）；
+    3) 合并后必须含等号——公式的强特征，同时滤掉表格里用数学字体排的数字串。
+    """
+    out = []
+    for pno, page in enumerate(doc):
+        try:
+            d = page.get_text("dict")
+        except Exception:
+            continue
+        cand = []
+        for b in d.get("blocks", []):
+            if b.get("type") != 0:      # 只处理文本块，跳过图片块
+                continue
+            for l in b.get("lines", []):
+                spans = l.get("spans", [])
+                txt = "".join(s.get("text", "") for s in spans)
+                total = len(txt)
+                if total < 5:
+                    continue
+                math_ch = sum(len(s.get("text", "")) for s in spans if _is_math_font(s.get("font", "")))
+                if math_ch / max(total, 1) < MATH_RATIO_MIN:
+                    continue
+                cand.append([l["bbox"][0], l["bbox"][1], l["bbox"][3], txt.strip()])
+        merged = []
+        for x0, y0, y1, txt in cand:
+            if merged and abs(y0 - merged[-1][2]) < MERGE_GAP_PT and len(merged[-1][3]) + len(txt) <= 160:
+                merged[-1][3] = merged[-1][3] + " " + txt
+                merged[-1][2] = y1
+            else:
+                merged.append([x0, y0, y1, txt])
+        for x0, y0, y1, txt in merged:
+            if "=" in txt:
+                out.append({"text": txt[:200], "page": pno + 1})
+    return out
+
+
+def _extract_formulas(full_text, doc, pages_text):
+    """抽取公式，返回 (公式文本列表, 对应页码列表)。
+
+    两条路径合并去重：
+    1) 原文自带 LaTeX 标记（$$...$$ / $...$）的 PDF —— 少数排版产物才有；
+    2) 字体与坐标启发式 —— 覆盖绝大多数真实 PDF（公式由 TeX 数学字体渲染，不含 $ 标记）。
+    """
+    formulas, pages_of = [], []
+
+    # 路径 1：LaTeX 标记
+    for m in re.finditer(r"\$\$([^$]+)\$\$|\$([^$]+)\$", full_text):
+        t = (m.group(1) or m.group(2)).strip()
+        if t:
+            formulas.append(t)
+            pages_of.append(0)      # 0 表示页码待定位
+
+    # 路径 2：字体启发式（页码已知）
+    for it in _font_formula_lines(doc):
+        formulas.append(it["text"])
+        pages_of.append(it["page"])
+
+    # 去重（按去空白后的文本），保序
+    seen, uniq_f, uniq_p = set(), [], []
+    for f, p in zip(formulas, pages_of):
+        key = re.sub(r"\s+", "", f)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        uniq_f.append(f)
+        uniq_p.append(p)
+
+    # 尚未定位页码的用页面文本子串匹配补
+    if any(p == 0 for p in uniq_p):
+        located = _locate_formula_pages(uniq_f, pages_text)
+        uniq_p = [located[i] if p == 0 else p for i, p in enumerate(uniq_p)]
+
+    return uniq_f[:30], uniq_p[:30]
 
 
 def _locate_formula_pages(formulas, pages):
@@ -208,8 +293,7 @@ def parse_pdf(path, progress_cb=None):
     full_text = "\n".join(pages)
     headings = _detect_headings(doc, pages)
     tables = _extract_tables(doc)
-    formulas = _extract_formulas(full_text)
-    formula_pages = _locate_formula_pages(formulas, pages)
+    formulas, formula_pages = _extract_formulas(full_text, doc, pages)
     meta = _extract_metadata(full_text, doc)
     refs = _extract_references(full_text, pages)
     chunks = chunk_text(pages)
