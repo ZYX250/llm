@@ -122,6 +122,26 @@ def _extract_formulas(text):
     return out[:30]
 
 
+def _locate_formula_pages(formulas, pages):
+    """为每个公式定位所在页码（去空白后按子串匹配），供阅读/解析视图显示 pxx 锚点。
+
+    注意：formulas 本身仍是字符串数组，页码放在并行字段 formula_pages 里，
+    这样前端原有的 parse.formulas.join('\\n') 渲染不会退化成 [object Object]。
+    """
+    compact = [re.sub(r"\s+", "", t) for t in pages]
+    out = []
+    for f in formulas:
+        key = re.sub(r"\s+", "", f)[:40]
+        page = 0
+        if key:
+            for pno, txt in enumerate(compact):
+                if key in txt:
+                    page = pno + 1
+                    break
+        out.append(page)
+    return out
+
+
 def _extract_metadata(full_text, doc):
     meta = {}
     # 标题：取文档元数据标题或第一行
@@ -189,6 +209,7 @@ def parse_pdf(path, progress_cb=None):
     headings = _detect_headings(doc, pages)
     tables = _extract_tables(doc)
     formulas = _extract_formulas(full_text)
+    formula_pages = _locate_formula_pages(formulas, pages)
     meta = _extract_metadata(full_text, doc)
     refs = _extract_references(full_text, pages)
     chunks = chunk_text(pages)
@@ -198,6 +219,7 @@ def parse_pdf(path, progress_cb=None):
         "headings": headings,
         "tables": tables,
         "formulas": formulas,
+        "formula_pages": formula_pages,
         "references": refs,
         "chunks": chunks,
         "page_count": meta.get("page_count", 0),

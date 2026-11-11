@@ -5,8 +5,8 @@ export default defineConfig({
   server:{
     host: true,
     port:5173,
-    // 解决ngrok访问403
-    allowedHosts: ['.ngrok-free.dev'],
+    // 允许任意域名访问（ngrok / cpolar / cloudflared 换地址都不再 403）
+    allowedHosts: true,
     proxy:{
       '/api':{
         target:'http://127.0.0.1:8000',

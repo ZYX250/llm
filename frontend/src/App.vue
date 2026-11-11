@@ -230,6 +230,11 @@
 
         <div class="chat" v-if="qaAnswer || qaStreamText">
           <div class="qa-conf" v-if="qaConfidence">回答置信度 <span class="conf" :class="'c'+qaConfidence">{{ qaConfidence }}</span>（依据检索命中率估算）</div>
+          <div class="qa-conf" v-if="qaVerify">
+            引用校验
+            <span class="conf" :class="qaVerify.status==='fail' ? 'c低' : (qaVerify.status==='warn' ? 'c中' : 'c高')">{{ qaVerify.status==='fail' ? '未通过' : (qaVerify.status==='warn' ? '存疑' : '通过') }}</span>
+            · {{ qaVerify.reason }}
+          </div>
           <div class="bubble">
             <div class="bubble-tools">
               <button class="copy-btn" @click="copyText(qaStreamText || qaAnswer)">📋 复制</button>
@@ -593,7 +598,7 @@ export default {
 
       papers: [], dedupNotice: "", uploading: false, uploadTasks: [],
       parse: null, parseTab: "标题树", parseTabs: ["标题树", "公式", "表格", "参考文献"],
-      qaQuery: "", qaAnswer: "", qaStreamText: "", qaSources: [], qaScope: [], qaLoading: false, qaConfidence: "",
+      qaQuery: "", qaAnswer: "", qaStreamText: "", qaSources: [], qaScope: [], qaLoading: false, qaConfidence: "", qaVerify: null,
       readPaper: "", readData: null, readPage: 1, readCurrent: "", readTranslated: "", mode: "single", translating: false, fontSize: 14, readJump: 1,
       searchQuery: "", searchResults: [],
       graph: { nodes: [], links: [], cornerstone: [], derivative: [] },
@@ -738,7 +743,7 @@ export default {
     toggleQaScope(id) { this.qaScope.includes(id) ? (this.qaScope = this.qaScope.filter(x => x !== id)) : this.qaScope.push(id); },
     askPreset(q) { this.qaQuery = q; this.askQA(); },
     async askQA() {
-      this.qaLoading = true; this.qaAnswer = ""; this.qaStreamText = ""; this.qaSources = []; this.qaConfidence = "";
+      this.qaLoading = true; this.qaAnswer = ""; this.qaStreamText = ""; this.qaSources = []; this.qaConfidence = ""; this.qaVerify = null;
       const scope = this.qaScope.length ? this.qaScope : this.papers.map(p => p.id);
       const body = { query: this.qaQuery, paper_ids: scope, top_k: 6 };
       try {
@@ -751,12 +756,18 @@ export default {
           for (const p of parts) {
             if (!p.startsWith("data:")) continue;
             const data = p.slice(5).trim(); if (data === "[DONE]") continue;
-            try { const j = JSON.parse(data); if (j.delta) this.qaStreamText += j.delta; if (j.sources) this.qaSources = j.sources; if (j.confidence) this.qaConfidence = j.confidence; } catch {}
+            try {
+              const j = JSON.parse(data);
+              if (j.delta) this.qaStreamText = (j.replace ? "" : this.qaStreamText) + j.delta;
+              if (j.sources) this.qaSources = j.sources;
+              if (j.confidence) this.qaConfidence = j.confidence;
+              if (j.verify) this.qaVerify = j.verify;
+            } catch {}
           }
         }
       } catch {
         const r = await this.api("/qa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        this.qaAnswer = r.answer || "出错"; this.qaSources = r.sources || []; this.qaConfidence = r.confidence || "";
+        this.qaAnswer = r.answer || "出错"; this.qaSources = r.sources || []; this.qaConfidence = r.confidence || ""; this.qaVerify = r.verify || null;
       }
       this.qaLoading = false;
     },
