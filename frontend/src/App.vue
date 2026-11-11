@@ -976,16 +976,16 @@ html, body, #app { height: 100%; }
 body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: var(--bg); color: var(--txt); }
 .app { display: flex; height: 100vh; }
 
-/* ===== 侧边栏 ===== */
-.sidebar { width: 252px; flex-shrink: 0; background: linear-gradient(180deg,#f3f5fd,#e9ecfa 70%,#efe9fb); color: #3a3f55; padding: 22px 14px; display: flex; flex-direction: column; gap: 22px; overflow-y: auto; }
-.brand { display: flex; align-items: center; gap: 13px; padding: 4px 6px 14px; border-bottom: 1px solid #dfe3f4; }
-.logo { width: 40px; height: 40px; flex-shrink: 0; filter: drop-shadow(0 2px 6px rgba(74,91,216,.28)); }
+/* 侧栏收窄 + 内边距收紧，让导航整体贴左，把宽度让给右侧功能区 */
+.sidebar { width: 210px; flex-shrink: 0; background: linear-gradient(180deg,#f3f5fd,#e9ecfa 70%,#efe9fb); color: #3a3f55; padding: 20px 8px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 4px 2px 12px; border-bottom: 1px solid #dfe3f4; }
+.logo { width: 34px; height: 34px; flex-shrink: 0; filter: drop-shadow(0 2px 6px rgba(74,91,216,.28)); }
 .logo path { fill: var(--c1); }
 .brand-name { font-size: 19px; font-weight: 800; letter-spacing: 1.5px; background: linear-gradient(90deg,#3a4a9a,#6a4bd8); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .brand-sub { font-size: 11px; color: #7a84ad; margin-top: 3px; letter-spacing: .5px; }
 .side-block { }
-.side-title { font-size: 11px; font-weight: 600; color: #8a94b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; padding: 0 8px; }
-.nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; margin-bottom: 4px; border: none; border-radius: 11px; background: transparent; color: #3c4156; font-size: 14px; cursor: pointer; text-align: left; transition: .18s; position: relative; }
+.side-title { font-size: 10.5px; font-weight: 600; color: #8a94b8; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; padding: 0 4px; }
+.nav-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 9px; margin-bottom: 4px; border: none; border-radius: 10px; background: transparent; color: #3c4156; font-size: 13.5px; cursor: pointer; text-align: left; transition: .18s; position: relative; }
 .nav-item:hover { background: rgba(74,91,216,.08); }
 .nav-item.active { background: linear-gradient(120deg,var(--c1),var(--c2)); color: #fff; font-weight: 600; box-shadow: 0 4px 12px rgba(74,91,216,.35); }
 .ni-name { flex: 1; }
@@ -994,21 +994,21 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .side-foot { margin-top: auto; font-size: 11px; color: #9aa3c4; text-align: center; line-height: 1.8; padding-top: 12px; border-top: 1px solid #dfe3f4; }
 
 /* ===== 主区域 ===== */
-.main { flex: 1; overflow-y: auto; padding: 18px 22px; background: radial-gradient(1200px 400px at 20% -5%, #e7ecff 0%, transparent 60%), var(--bg); }
-/* 放宽上限：1280 → 1680，让中控台/双语阅读铺满可用宽度，消除两侧大块留白 */
-.panel { max-width: 1680px; margin: 0 auto; background: var(--card); border-radius: 18px; padding: 24px 26px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+.main { flex: 1; min-width: 0; overflow-y: auto; padding: 14px 14px; background: radial-gradient(1200px 400px at 20% -5%, #e7ecff 0%, transparent 60%), var(--bg); }
+/* 放宽上限并压缩面板内边距：1680 之前会铺满，只有超宽屏才居中，把空间留给内容 */
+.panel { max-width: 1680px; margin: 0 auto; background: var(--card); border-radius: 16px; padding: 18px 20px; box-shadow: var(--shadow); border: 1px solid var(--line); }
 .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; flex-wrap: wrap; gap: 12px 16px; }
 .panel-head h2 { font-size: 19px; color: #24305c; display: flex; align-items: center; gap: 8px; }
 .m-ico { font-size: 17px; width: 36px; height: 36px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(60,80,180,.12); flex-shrink: 0; }
-.ni-ico { font-size: 15px; width: 30px; height: 30px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; background: rgba(74,91,216,.10); flex-shrink: 0; transition: .18s; }
+.ni-ico { font-size: 14px; width: 27px; height: 27px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: rgba(74,91,216,.10); flex-shrink: 0; transition: .18s; }
 .nav-item.active .ni-ico { background: rgba(255,255,255,.28); box-shadow: 0 2px 8px rgba(0,0,0,.16); }
 .head-right { display: flex; align-items: center; gap: 20px; }
 .info { color: #7a809c; font-size: 13px; background: #f1f3fa; border: 1px solid #e6eaf6; border-radius: 20px; padding: 6px 14px; white-space: nowrap; }
 
 /* 控制台 */
-.home-panel { padding: 28px; }
-.panel-banner { background: linear-gradient(120deg,#eef1ff,#f6f0ff); border: 1px solid var(--line); border-radius: 16px; padding: 32px 36px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
-.banner-title { font-size: 38px; font-weight: 800; line-height: 1.2; padding: 8px 0; background: linear-gradient(90deg,var(--c1),var(--c2)); -webkit-background-clip: text; background-clip: text; color: transparent; letter-spacing: 1px; }
+.home-panel { padding: 20px; }
+.panel-banner { background: linear-gradient(120deg,#eef1ff,#f6f0ff); border: 1px solid var(--line); border-radius: 14px; padding: 24px 28px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; }
+.banner-title { font-size: 34px; font-weight: 800; line-height: 1.2; padding: 6px 0; background: linear-gradient(90deg,var(--c1),var(--c2)); -webkit-background-clip: text; background-clip: text; color: transparent; letter-spacing: 1px; }
 .banner-sub { color: var(--sub); font-size: 15px; margin-top: 12px; }
 .banner-pills { display: flex; gap: 10px; flex-wrap: wrap; }
 .pill { background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 6px 14px; font-size: 12px; color: #445; box-shadow: 0 2px 6px rgba(50,70,160,.05); }
@@ -1167,7 +1167,7 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .progress-bar { flex: 1; height: 8px; background: #e7ebf7; border-radius: 6px; overflow: hidden; }
 .progress-fill { height: 100%; background: linear-gradient(90deg,var(--c1),var(--c3)); border-radius: 6px; transition: width .3s; }
 .progress-txt { font-size: 12px; color: var(--sub); white-space: nowrap; }
-.read-layout { display: grid; grid-template-columns: 240px 1fr; gap: 18px; }
+.read-layout { display: grid; grid-template-columns: 210px 1fr; gap: 14px; }
 .read-toc { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: linear-gradient(160deg,#ffffff,#f8f9ff); max-height: 70vh; overflow-y: auto; text-align: left; }
 .toc-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; color: var(--c1); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #eef1fb; letter-spacing: 1px; }
 .toc-title::after { content: ""; flex: 1; height: 2px; border-radius: 2px; background: linear-gradient(90deg,#eef1fb,#ffffff); }
