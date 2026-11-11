@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 import llm
 import pdf_parser
+import verify
 from vectorstore import VectorStore
 import graph_engine
 import viz_engine
@@ -69,6 +70,7 @@ def _save_paper(pid):
         with open(pdir / "parse.json", "w", encoding="utf-8") as f:
             json.dump({"meta": parse["meta"], "headings": parse["headings"],
                        "tables": parse["tables"], "formulas": parse["formulas"],
+                       "formula_pages": parse.get("formula_pages", []),
                        "references": parse["references"], "chunks": parse["chunks"],
                        "page_count": parse["page_count"], "used_ocr": parse["used_ocr"],
                        "char_count": parse["char_count"]}, f, ensure_ascii=False)
@@ -105,18 +107,21 @@ def load_state():
 
 
 # ---------------- 工具函数 ----------------
-def _dedup_notice(title, full_text):
-    """语义去重：与已入库论文比较，返回重复提示。"""
+def _dedup_notice(title, full_text, exclude_pid=None):
+    """语义去重：与已入库论文比较（排除自身），返回重复提示。"""
     if not vs.papers:
         return None
-    hits = vs.search(title + " " + full_text[:1500], top_k=1)
-    if hits and hits[0]["score"] >= 0.35:
-        dup = hits[0]
-        return {
-            "similar_to": dup["title"],
-            "score": dup["score"],
-            "notice": f"检测到与《{dup['title']}》高度相似，请核对是否重复版本，建议保留最新版。",
-        }
+    # 取 3 条而不是 1 条：即便最高分是自己，也能继续看下一名
+    hits = vs.search(title + " " + full_text[:1500], top_k=3)
+    for h in hits:
+        if exclude_pid and h["paper_id"] == exclude_pid:
+            continue
+        if h["score"] >= 0.35:
+            return {
+                "similar_to": h["title"],
+                "score": h["score"],
+                "notice": f"检测到与《{h['title']}》高度相似，请核对是否重复版本，建议保留最新版。",
+            }
     return None
 
 
@@ -143,7 +148,7 @@ def _run_parse(pid, path, filename):
         _save_paper(pid)
         _save_meta()
         TASKS[pid].update(status="done", progress=100, error="", dedup=_dedup_notice(
-            title, " ".join(c["text"] for c in parse["chunks"])))
+            title, " ".join(c["text"] for c in parse["chunks"]), exclude_pid=pid))
     except Exception as e:
         TASKS[pid].update(status="error", error=str(e))
         print(f"解析 {filename} 失败：", e)
@@ -228,6 +233,7 @@ def paper_parse(pid: str):
         "headings": parse["headings"][:200],
         "tables": parse["tables"],
         "formulas": parse["formulas"],
+        "formula_pages": parse.get("formula_pages", []),
         "references": parse["references"],
         "used_ocr": parse["used_ocr"],
         "page_count": parse["page_count"],
@@ -302,18 +308,22 @@ class QABody(BaseModel):
 GUARD_PROMPT = (
     "你是一名科研助手，基于【原文片段】回答用户问题。必须遵守：\n"
     "1. 只依据给定片段作答，禁止编造或臆测（抗幻觉）；\n"
-    "2. 回答中标注引用来源，如 [来源 论文名 第X页]；\n"
+    "2. 每个片段前都有方括号编号，回答中必须用 [1]、[2] 这样的纯数字编号标注出处；"
+    "不得使用 [来源 …]、[片段1]、[1-3] 等其它写法；同一句引用多段时写成 [1][3]；\n"
     "3. 若片段不足以回答，明确说明“证据不足”，并给出最接近的信息，不要强行下结论；\n"
     "4. 区分事实（片段支持）与推测（明确标注“推测”）；\n"
-    "5. 若问题涉及多篇论文且观点不同，请分别指出各论文的立场并标注分歧（跨文献对比）。\n\n"
+    "5. 若问题涉及多篇论文且观点不同，请分别指出各论文的立场并标注分歧（跨文献对比）；\n"
+    "6. 回答中的数值必须与所引片段原文一致，不得自行换算、补零或编造。\n\n"
 )
 
 
-def _confidence(max_score, n_hits=1):
-    """结合最高命中分数与命中数量分级，单命中高分谨慎降档。"""
-    if max_score >= 0.5:
-        return "高" if n_hits >= 2 else "中"
-    if max_score >= 0.3:
+def _confidence(max_score, n_hits=1, verified=True):
+    """置信度：检索最高分 + 命中数量 + 引用校验结果，三者结合分级。"""
+    if not verified:
+        return "低"
+    if max_score >= 0.5 and n_hits >= 2:
+        return "高"
+    if max_score >= 0.3 or (max_score >= 0.22 and n_hits >= 3):
         return "中"
     return "低"
 
@@ -347,38 +357,57 @@ def qa(body: QABody):
     scope = body.paper_ids or None
     hits = _expand_retrieval(body.query, scope=scope, top_k=body.top_k)
     if not hits:
-        return {"answer": "（未检索到相关内容，请先上传并解析论文）", "sources": []}
-    ctx = "\n\n".join(
-        f"[来源 {h['title']} 第{h['page']}页]\n{h['text']}" for h in hits
-    )
+        return {"answer": "（未检索到相关内容，请先上传并解析论文）", "sources": [],
+                "confidence": "低",
+                "verify": {"ok": True, "status": "pass", "reason": "未检索到片段，未生成回答"}}
+    ctx = verify.build_context(hits)
     prompt = GUARD_PROMPT + f"【原文片段】\n{ctx}\n\n【问题】{body.query}"
-    answer = llm.chat([{"role": "user", "content": prompt}], temperature=0.2)
+    raw = llm.chat([{"role": "user", "content": prompt}], temperature=0.2)
+    v = verify.verify_answer(raw, hits)
+    answer = verify.finalize_answer(raw, v)
+    conf = _confidence(hits[0]["score"], len(hits), v["status"] != "fail")
     sources = [{"title": h["title"], "page": h["page"], "snippet": h["text"][:220],
-                "score": h["score"], "confidence": _confidence(h["score"], len(hits))} for h in hits]
-    return {"answer": answer, "sources": sources, "confidence": _confidence(hits[0]["score"], len(hits)),
+                "score": h["score"], "confidence": conf} for h in hits]
+    return {"answer": answer, "sources": sources, "confidence": conf, "verify": v,
             "papers": list_papers()["papers"]}
 
 
 @app.post("/qa/stream")
 async def qa_stream(body: QABody):
-    """SSE 流式问答（带来源锚点 + 置信度 + 查询改写）。"""
+    """SSE 流式问答（来源锚点 + 置信度 + 查询改写 + 引用程序校验）。"""
     scope = body.paper_ids or None
     hits = _expand_retrieval(body.query, scope=scope, top_k=body.top_k)
     if not hits:
         async def empty():
-            yield "data: " + json.dumps({"error": "未检索到内容"}, ensure_ascii=False) + "\n\n"
+            yield "data: " + json.dumps({"error": "未检索到内容", "verify": {
+                "ok": True, "status": "pass", "reason": "未检索到片段，未生成回答"}},
+                ensure_ascii=False) + "\n\n"
+            yield "data: [DONE]\n\n"
         return StreamingResponse(empty(), media_type="text/event-stream")
 
-    ctx = "\n\n".join(f"[来源 {h['title']} 第{h['page']}页]\n{h['text']}" for h in hits)
+    ctx = verify.build_context(hits)
     prompt = GUARD_PROMPT + f"【原文片段】\n{ctx}\n\n【问题】{body.query}"
+    n_hits = len(hits)
 
     def gen():
+        # 首帧照旧下发来源锚点：即使随后拒答，也能让评委看到「检索到 N 段但校验不过」
         yield "data: " + json.dumps({"sources": [
             {"title": h["title"], "page": h["page"], "snippet": h["text"][:220],
-             "score": h["score"], "confidence": _confidence(h["score"], len(hits))} for h in hits
-        ], "confidence": _confidence(hits[0]["score"], len(hits))}, ensure_ascii=False) + "\n\n"
+             "score": h["score"], "confidence": _confidence(h["score"], n_hits)} for h in hits
+        ], "confidence": _confidence(hits[0]["score"], n_hits)}, ensure_ascii=False) + "\n\n"
+        buf = []
         for piece in llm.stream_chat([{"role": "user", "content": prompt}], temperature=0.2):
+            buf.append(piece)
             yield "data: " + json.dumps({"delta": piece}, ensure_ascii=False) + "\n\n"
+        answer = "".join(buf)
+        v = verify.verify_answer(answer, hits)
+        if v["status"] == "fail":
+            # 校验不通过：replace=True，前端据此用拒答文案覆盖已上屏的正文
+            yield "data: " + json.dumps({"verify": v, "replace": True,
+                                         "delta": verify.REFUSAL_TEXT, "confidence": "低"},
+                                        ensure_ascii=False) + "\n\n"
+        else:
+            yield "data: " + json.dumps({"verify": v}, ensure_ascii=False) + "\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
