@@ -11,6 +11,8 @@ from collections import Counter
 import numpy as np
 import llm
 
+RRF_K = 60   # RRF 平滑常数（Cormack 等 2009 的经验值）
+
 
 def _tokenize(text):
     """轻量分词：英文单词 + 中文单字 + 中英 bigram。"""
@@ -95,6 +97,7 @@ class VectorStore:
 
         scores = [s * (1 - self.dense_weight) for s in sparse_scores]
 
+        has_dense = False
         if self._dense is not None:
             q_emb = llm.embed_text(query)
             if q_emb is not None:
@@ -105,8 +108,22 @@ class VectorStore:
                 cos = (dmat @ q_emb) / (dn * qn + 1e-9)
                 for k in range(len(idxs)):
                     scores[k] += float(cos[k]) * self.dense_weight
+                has_dense = True
 
-        ranked = sorted(zip(idxs, scores), key=lambda x: -x[1])
+        # RRF 融合：只用来确定召回顺序，score 仍保留 0~1 的混合分。
+        # 这样 _confidence / _dedup_notice / _find_duplicates / _expand_retrieval
+        # 四处下游阈值全部不用改，也不会出现“RRF 原始分 0.0167 击穿 0.5/0.3/0.35/0.9”的问题。
+        rrf = {}
+        rank_s = sorted(range(len(idxs)), key=lambda k: -sparse_scores[k])
+        for r, k in enumerate(rank_s):
+            rrf[idxs[k]] = 1.0 / (RRF_K + r)
+        if has_dense:
+            rank_d = sorted(range(len(idxs)), key=lambda k: -float(cos[k]))
+            for r, k in enumerate(rank_d):
+                rrf[idxs[k]] += 1.0 / (RRF_K + r)
+
+        # 与原来唯一的差别：排序键从 score 换成 rrf，ranked 仍是 (全局idx, 混合分) 二元组
+        ranked = sorted(zip(idxs, scores), key=lambda x: -rrf.get(x[0], 0.0))
         results = []
         for i, sc in ranked[:top_k]:
             pid, ci, text, page = self._flat[i]
