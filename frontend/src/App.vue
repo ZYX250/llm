@@ -342,16 +342,22 @@
                 </span>
               </div>
               <div class="dual" v-if="mode==='dual'">
-                <div class="col en"><div class="col-label">原文（EN）</div><div class="col-body paper-text" :style="{ fontSize: fontSize+'px' }">{{ fmtText(readCurrent) }}</div></div>
+                <div class="col en"><div class="col-label">原文（EN）</div><div class="col-body paper-text" :style="{ fontSize: fontSize+'px' }">
+                  <p v-for="(para, pi) in fmtPars(readCurrent)" :key="'en'+pi">{{ para }}</p>
+                </div></div>
                 <div class="col zh"><div class="col-label">译文（ZH）</div><div class="col-body paper-text" :style="{ fontSize: fontSize+'px' }">
-                  <template v-if="readTranslated">{{ fmtText(readTranslated) }}</template>
+                  <template v-if="readTranslated">
+                    <p v-for="(para, pi) in fmtPars(readTranslated)" :key="'zh'+pi">{{ para }}</p>
+                  </template>
                   <template v-else>
                     <span v-if="translating">翻译中…</span>
                     <button v-else class="btn small translate-inline" @click="translatePage">📝 翻译本页（中英对照）</button>
                   </template>
                 </div></div>
               </div>
-              <div class="col single-body" v-else><div class="col-body paper-text" :style="{ fontSize: fontSize+'px' }">{{ fmtText(readCurrent) }}</div></div>
+              <div class="col single-body" v-else><div class="col-body paper-text" :style="{ fontSize: fontSize+'px' }">
+                <p v-for="(para, pi) in fmtPars(readCurrent)" :key="'sp'+pi">{{ para }}</p>
+              </div></div>
             </div>
           </div>
         </div>
@@ -873,6 +879,14 @@ export default {
       if (!t) return "";
       return t.split(/\n+/).map(s => s.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n\n");
     },
+    // 真正的段落还原：空行=段落边界；段内被 PDF 切开的软换行拼回一行
+    fmtPars(t) {
+      if (!t) return [];
+      return t.replace(/\r/g, "")
+        .split(/\n\s*\n/)
+        .map(block => block.split("\n").map(s => s.replace(/\s+/g, " ").trim()).filter(Boolean).join(" "))
+        .filter(Boolean);
+    },
     onPetDown(e) {
       if (this.petOpen && e.target.closest(".pet-card")) return;
       this.petDrag = { sx: e.clientX, sy: e.clientY, ox: this.petX, oy: this.petY, moved: false };
@@ -1215,6 +1229,9 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .col-label { background: linear-gradient(120deg,#eef1fb,#efeafb); padding: 8px 12px; font-size: 12px; color: var(--c1); font-weight: 600; letter-spacing: 1px; }
 .col-body { padding: 18px 26px; font-size: 13px; line-height: 2; white-space: pre-wrap; max-height: 60vh; overflow: auto; }
 .paper-text { font-family: Georgia, "Times New Roman", "Songti SC", "SimSun", serif; color: #2b2b3a; }
+/* 论文正文排版：首行空两格 / 段前 1.4 倍行距 / 段内 1 倍行距 / 左对齐 */
+.paper-text p { margin: 0; text-indent: 2em; line-height: 1.2; text-align: left; word-break: break-word; }
+.paper-text p + p { margin-top: 1.4em; }
 .paper-text .translate-inline { font-family: inherit; }
 .single-body .col-body { max-height: 70vh; }
 .translate-inline { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 7px 14px; }
