@@ -172,7 +172,11 @@ def stream_chat(messages, model=None, temperature=0.3):
 
 
 def embed_texts(texts):
-    """批量文本向量化（含缓存）。失败返回 None，调用方应降级为 sparse。"""
+    """批量文本向量化（含缓存）。失败返回 None，调用方应降级为 sparse。
+
+    注意：DashScope 兼容模式单次 input 有条数上限（实测 120 条整体失败、10 条正常），
+    所以这里按 10 条分批；任意一批失败就返回 None，由上层降级为纯 sparse。
+    """
     if not API_KEY or not texts:
         return None
     key = hashlib.md5(json.dumps(
@@ -182,16 +186,21 @@ def embed_texts(texts):
     cached = _cache_get(key)
     if cached is not None:
         return cached
+    out = []
+    batch = 10
     try:
-        resp = requests.post(
-            EMB_URL, headers=_headers(),
-            json={"model": EMB_MODEL, "input": texts, "dimensions": 1024},
-            timeout=120,
-        )
-        res = resp.json()
-        if "data" not in res:
-            return None
-        out = [d["embedding"] for d in res["data"]]
+        for i in range(0, len(texts), batch):
+            part = texts[i:i + batch]
+            resp = requests.post(
+                EMB_URL, headers=_headers(),
+                json={"model": EMB_MODEL, "input": part, "dimensions": 1024},
+                timeout=120,
+            )
+            res = resp.json()
+            if "data" not in res:
+                print("embedding 批次失败(将降级sparse)：", str(res)[:200])
+                return None
+            out.extend(d["embedding"] for d in res["data"])
         _cache_put(key, out)
         return out
     except Exception as e:
