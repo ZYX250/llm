@@ -994,8 +994,9 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .side-foot { margin-top: auto; font-size: 11px; color: #9aa3c4; text-align: center; line-height: 1.8; padding-top: 12px; border-top: 1px solid #dfe3f4; }
 
 /* ===== 主区域 ===== */
-.main { flex: 1; overflow-y: auto; padding: 24px 30px; background: radial-gradient(1200px 400px at 20% -5%, #e7ecff 0%, transparent 60%), var(--bg); }
-.panel { max-width: 1280px; margin: 0 auto; background: var(--card); border-radius: 18px; padding: 26px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+.main { flex: 1; overflow-y: auto; padding: 18px 22px; background: radial-gradient(1200px 400px at 20% -5%, #e7ecff 0%, transparent 60%), var(--bg); }
+/* 放宽上限：1280 → 1680，让中控台/双语阅读铺满可用宽度，消除两侧大块留白 */
+.panel { max-width: 1680px; margin: 0 auto; background: var(--card); border-radius: 18px; padding: 24px 26px; box-shadow: var(--shadow); border: 1px solid var(--line); }
 .panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; flex-wrap: wrap; gap: 12px 16px; }
 .panel-head h2 { font-size: 19px; color: #24305c; display: flex; align-items: center; gap: 8px; }
 .m-ico { font-size: 17px; width: 36px; height: 36px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(60,80,180,.12); flex-shrink: 0; }
@@ -1044,7 +1045,8 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .cp-btn { padding: 5px 14px; border-radius: 16px; border: 1px solid #d4ddff; background: #fff; color: #3a4a9a; font-size: 12px; cursor: pointer; }
 .cp-btn:hover { background: #eef1ff; }
 .chat-body { max-height: 320px; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; }
-.msg { max-width: 82%; }
+/* 宽屏下气泡不再拉满整行，保持易读行长 */
+.msg { max-width: min(82%, 760px); }
 .msg.user { align-self: flex-end; }
 .msg.assistant { align-self: flex-start; }
 .bubble { padding: 12px 15px; border-radius: 14px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
@@ -1165,7 +1167,7 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .progress-bar { flex: 1; height: 8px; background: #e7ebf7; border-radius: 6px; overflow: hidden; }
 .progress-fill { height: 100%; background: linear-gradient(90deg,var(--c1),var(--c3)); border-radius: 6px; transition: width .3s; }
 .progress-txt { font-size: 12px; color: var(--sub); white-space: nowrap; }
-.read-layout { display: grid; grid-template-columns: 220px 1fr; gap: 16px; }
+.read-layout { display: grid; grid-template-columns: 240px 1fr; gap: 18px; }
 .read-toc { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: linear-gradient(160deg,#ffffff,#f8f9ff); max-height: 70vh; overflow-y: auto; text-align: left; }
 .toc-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; color: var(--c1); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #eef1fb; letter-spacing: 1px; }
 .toc-title::after { content: ""; flex: 1; height: 2px; border-radius: 2px; background: linear-gradient(90deg,#eef1fb,#ffffff); }
@@ -1187,10 +1189,10 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .tlv3 { padding-left: 28px; }
 .read-toolbar { display: flex; align-items: center; gap: 12px; margin: 12px 0; color: #667; font-size: 13px; flex-wrap: wrap; }
 .mode-toggle { margin-left: auto; display: flex; gap: 6px; }
-.dual { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dual { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .col { background: #fafbff; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
 .col-label { background: linear-gradient(120deg,#eef1fb,#efeafb); padding: 8px 12px; font-size: 12px; color: var(--c1); font-weight: 600; letter-spacing: 1px; }
-.col-body { padding: 16px 18px; font-size: 13px; line-height: 2; white-space: pre-wrap; max-height: 60vh; overflow: auto; }
+.col-body { padding: 18px 26px; font-size: 13px; line-height: 2; white-space: pre-wrap; max-height: 60vh; overflow: auto; }
 .paper-text { font-family: Georgia, "Times New Roman", "Songti SC", "SimSun", serif; color: #2b2b3a; }
 .paper-text .translate-inline { font-family: inherit; }
 .single-body .col-body { max-height: 70vh; }
