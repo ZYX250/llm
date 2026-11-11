@@ -377,7 +377,7 @@
 
         <div class="qa-input">
           <input v-model="searchQuery" class="txt" placeholder="输入论文名/关键词，如 Transformer attention 或参考文献条目" @keyup.enter="doSearch" />
-          <button class="btn primary" :disabled="!searchQuery" @click="doSearch">检索 arXiv</button>
+          <button class="btn primary" :disabled="!searchQuery || searchLoading" @click="doSearch">{{ searchLoading ? "检索中…" : "检索 arXiv" }}</button>
         </div>
         <!-- 小部件：结果画像 -->
         <div class="search-stat" v-if="searchResults.length">
@@ -399,7 +399,9 @@
             <div class="reason">推荐理由：{{ it.reason }}</div>
           </div>
         </div>
-        <div class="empty" v-if="!searchResults.length">输入关键词检索 arXiv 最新论文</div>
+        <div class="empty" v-if="searchError" style="color:#c0392b">{{ searchError }}</div>
+        <div class="empty" v-else-if="searchLoading">正在向 arXiv 请求，首次约需 10–40 秒（arXiv 服务器响应较慢），同一关键词第二次会秒回…</div>
+        <div class="empty" v-else-if="!searchResults.length">输入关键词检索 arXiv 最新论文</div>
       </section>
 
       <!-- ===== 模块五 引用图谱 ===== -->
@@ -605,7 +607,7 @@ export default {
       parse: null, parseTab: "标题树", parseTabs: ["标题树", "公式", "表格", "参考文献"],
       qaQuery: "", qaAnswer: "", qaStreamText: "", qaSources: [], qaScope: [], qaLoading: false, qaConfidence: "", qaVerify: null,
       readPaper: "", readData: null, readPage: 1, readCurrent: "", readTranslated: "", mode: "single", translating: false, fontSize: 14, readJump: 1, pageSums: [],
-      searchQuery: "", searchResults: [],
+      searchQuery: "", searchResults: [], searchLoading: false, searchError: "",
       graph: { nodes: [], links: [], cornerstone: [], derivative: [] },
       summaryText: "", futureText: "",
       writeTab: "frame", writeTabs: [
@@ -809,7 +811,29 @@ export default {
       this.translating = false;
       if (r.ok) { this.readTranslated = r.translated; this.mode = "dual"; }
     },
-    async doSearch() { const r = await this.api("/search/arxiv?q=" + encodeURIComponent(this.searchQuery) + "&max_results=8"); this.searchResults = r.items || []; },
+    async doSearch() {
+      const q = (this.searchQuery || "").trim();
+      if (!q || this.searchLoading) return;
+      this.searchLoading = true;
+      this.searchError = "";
+      try {
+        const r = await this.api("/search/arxiv?q=" + encodeURIComponent(q) + "&max_results=8");
+        if (r && r.ok === false) {
+          this.searchResults = [];
+          this.searchError = "检索失败：" + (r.msg || "arXiv 接口无响应");
+        } else if (r && Array.isArray(r.items)) {
+          this.searchResults = r.items;
+        } else {
+          this.searchResults = [];
+          this.searchError = "检索失败：返回数据格式异常";
+        }
+      } catch (e) {
+        this.searchResults = [];
+        this.searchError = "网络异常：" + (e && e.message ? e.message : e);
+      } finally {
+        this.searchLoading = false;
+      }
+    },
     async loadGraph() { const r = await this.api("/graph"); this.graph = r; this.$nextTick(() => this.renderGraph()); },
     renderGraph() {
       if (!this.graph.nodes.length || !this.$refs.graphEl) return;

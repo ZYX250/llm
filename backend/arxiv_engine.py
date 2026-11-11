@@ -4,10 +4,12 @@ arxiv_engine.py — 论文自动检索、追踪与智能推荐
 支持按相关性排序并给出推荐理由。
 """
 import re
+import time
 import requests
 import xml.etree.ElementTree as ET
 
-ARXIV_API = "http://export.arxiv.org/api/query"
+ARXIV_API = "https://export.arxiv.org/api/query"
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; ResearchAssistant/1.0; +https://github.com/ZYX250/llm)"}
 NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",
@@ -18,15 +20,47 @@ def _clean(tag):
     return re.sub(r"\{[^}]*\}", "", tag)
 
 
+def _normalize_query(q):
+    """arXiv 接口必须带字段前缀：裸词查询（如 Large Language Model）会让服务端长时间不返回。"""
+    q = (q or "").strip()
+    if not q:
+        return 'all:""'
+    if re.match(r"^(all|ti|au|abs|cat|co|jr|rn|id)\s*:", q, re.I):
+        return q
+    q = q.replace('"', "")
+    return 'all:"%s"' % q
+
+
+_CACHE = {}
+_CACHE_TTL = 600  # 10 分钟内同一查询直接复用，避免重复等待
+
+
 def search(query, max_results=10):
+    key = ((query or "").strip().lower(), max_results)
+    hit = _CACHE.get(key)
+    if hit and time.time() - hit[0] < _CACHE_TTL:
+        return hit[1]
     params = {
-        "search_query": query,
+        "search_query": _normalize_query(query),
         "start": 0,
         "max_results": max_results,
         "sortBy": "relevance",
     }
-    r = requests.get(ARXIV_API, params=params, timeout=30)
-    root = ET.fromstring(r.content)
+    root = None
+    last_err = None
+    # arXiv 在部分网络下会长时间挂起：限制连接/读取超时并重试一次
+    for attempt in range(2):
+        try:
+            r = requests.get(ARXIV_API, params=params, headers=HEADERS, timeout=(10, 30))
+            r.raise_for_status()
+            root = ET.fromstring(r.content)
+            break
+        except Exception as e:
+            last_err = e
+            if attempt == 0:
+                time.sleep(1)
+    if root is None:
+        raise RuntimeError(f"arXiv 接口无响应（{type(last_err).__name__}）：请检查网络或稍后重试")
     items = []
     for entry in root.findall("atom:entry", NS):
         title = re.sub(r"\s+", " ", entry.findtext("atom:title", "", NS)).strip()
@@ -45,6 +79,7 @@ def search(query, max_results=10):
             "github": github.group(1) if github else None,
             "reproducible": bool(github),
         })
+    _CACHE[key] = (time.time(), items)
     return items
 
 
