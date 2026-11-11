@@ -9,3 +9,5 @@ ngrok.exe
 backend/.cache/
 backend/chroma_db/
 *.old
+*_old.*
+*.zip

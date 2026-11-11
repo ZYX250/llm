@@ -12,18 +12,21 @@
 ```
 llm_competition/
 ├── start.py             # 一键启动（后端+前端同时拉起，Ctrl+C 停止）
+├── pack.ps1             # 打包提交 ZIP（排除 .env/.venv/node_modules/缓存/_old，含泄漏检查）
 ├── README.md
 ├── backend/
 │   ├── main.py            # FastAPI 应用与全部路由（含持久化/异步解析/Agent多步）
 │   ├── llm.py             # 大模型封装（含磁盘结果缓存）
 │   ├── pdf_parser.py      # PDF 多模态细粒度解析（矢量/OCR/标题树/表格/公式/参考文献/分块，支持进度回调）
-│   ├── vectorstore.py     # 向量库 + TF-IDF稀疏&Dense混合检索(RAG)
+│   ├── vectorstore.py     # 向量库 + 稀疏&Dense双路检索，RRF 融合定序(RAG)
 │   ├── graph_engine.py    # 引用图谱 + PageRank/中介中心性挖掘基石论文
 │   ├── viz_engine.py      # CSV 数据可视化 + 学术 Figure Caption
 │   ├── arxiv_engine.py    # arXiv 检索 + GitHub 可复现标记 + 个性化推荐
 │   ├── agent.py           # Agent 编排：工具注册表 + 意图路由 + 多步计划
 │   ├── requirements.txt
-│   ├── .env               # 配置 DASHSCOPE_API_KEY（必需）
+│   ├── verify.py          # 抗幻觉程序判定（引用白名单 + 逐句数值回查 + 拒答）
+│   ├── tests/             # pytest：去重 / 检索RRF / 图谱 / 引用校验（22 例）
+│   ├── .env               # 配置 DASHSCOPE_API_KEY（必需，从 .env.example 复制）
 │   └── papers/            # 论文落盘目录（parse.json + meta.json 持久化）
 └── frontend/
     ├── src/App.vue        # 六大模块前端界面
@@ -33,6 +36,13 @@ llm_competition/
 ```
 
 ## 启动步骤
+
+### 步骤 0：配置 API Key（首次必做）
+```cmd
+copy backend\.env.example backend\.env
+```
+然后编辑 `backend\.env`，把 `DASHSCOPE_API_KEY=` 后面填上百炼 API Key。
+`.env` 已被 `.gitignore` 排除，既不进仓库、也不进打包 ZIP。
 
 ### 方式一：一键启动（推荐）
 ```cmd
@@ -86,7 +96,7 @@ npm run dev
         ▼                  ▼               ▼
     PDF解析引擎       向量库(RAG)      大模型(DashScope)
     pdf_parser       vectorstore          llm
-    (OCR/表格/公式)   (TF-IDF+Dense)   (缓存/护栏/翻译)
+    (OCR/表格/公式)   (稀疏+Dense, RRF)   (缓存/护栏/翻译)
 ```
 
 ## 工程优化亮点
@@ -108,6 +118,19 @@ npm run dev
 - **抗幻觉 RAG**：混合检索 + 每个回答带 `[来源 论文名 第X页]` 锚点 + 置信度
 - **多模态解析**：扫描件自动 OCR、标题树、公式、表格、参考文献，长文档异步解析
 - **工程可复现**：模块化解耦、requirements.txt、磁盘持久化、结果缓存、本地 ECharts
+## 运行测试与打包
+
+```cmd
+cd backend
+.venv\Scripts\python.exe -m pytest tests -q
+```
+预期 `22 passed`，覆盖语义去重、RRF 检索、引用图谱、抗幻觉引用校验四块。
+
+打提交包（自动排除 `.env`、`.venv`、`node_modules`、`.cache`、`chroma_db`、`papers`、`dist`、`*_old*`、`ngrok.exe`；打包后会回读 ZIP 做泄漏检查，命中敏感文件即报错并删除产物）：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\pack.ps1
+```
+
 ## 团队信息
 
 - 参赛者：赵羽翔
