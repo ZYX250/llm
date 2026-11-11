@@ -192,6 +192,16 @@ def list_papers():
     return {"papers": list(papers_meta.values())}
 
 
+def _reparse_job(pid, path, filename):
+    """后台重解析：先移除旧索引（会触发全库 embedding 重建，耗时数十秒），再重新解析。
+    这些操作不能放在 async 路由里同步执行，否则整个事件循环被阻塞、其他接口全部超时。"""
+    try:
+        vs.remove_paper(pid)
+    except Exception as e:
+        print("移除旧索引失败：", e)
+    _run_parse(pid, path, filename)
+
+
 @app.post("/papers/{pid}/reparse")
 async def reparse_paper(pid: str):
     """重新解析已入库论文：OCR 全页重扫，覆盖旧解析与向量索引（用于扫描页无文本的情况）。"""
@@ -202,8 +212,7 @@ async def reparse_paper(pid: str):
     if not path.exists():
         return JSONResponse({"ok": False, "msg": "原 PDF 文件缺失，无法重扫"}, status_code=404)
     TASKS[pid] = {"status": "parsing", "progress": 0, "error": ""}
-    vs.remove_paper(pid)  # 先移除旧索引，避免重复
-    threading.Thread(target=_run_parse, args=(pid, path, meta["filename"]), daemon=True).start()
+    threading.Thread(target=_reparse_job, args=(pid, path, meta["filename"]), daemon=True).start()
     return {"ok": True, "status": "parsing",
             "msg": "已开始重新解析（含 OCR 全页重扫），完成后每页原文即可查看，请稍候刷新。"}
 
@@ -551,7 +560,8 @@ def get_graph():
     papers = []
     for pid, p in papers_meta.items():
         refs = CACHE.get(pid, {}).get("references", [])
-        papers.append({"id": pid, "title": p["title"], "references": refs})
+        papers.append({"id": pid, "title": p["title"], "filename": p.get("filename", ""),
+                       "references": refs})
     g = graph_engine.build_graph(papers)
     return {"ok": True, "empty": False, **g}
 

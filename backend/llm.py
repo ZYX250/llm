@@ -180,7 +180,7 @@ def embed_texts(texts):
     if not API_KEY or not texts:
         return None
     key = hashlib.md5(json.dumps(
-        {"m": EMB_MODEL, "n": len(texts), "s": texts},
+        {"m": EMB_MODEL, "v": 2, "n": len(texts), "s": texts},
         ensure_ascii=False, sort_keys=True
     ).encode("utf-8")).hexdigest()
     cached = _cache_get(key)
@@ -201,6 +201,11 @@ def embed_texts(texts):
                 print("embedding 批次失败(将降级sparse)：", str(res)[:200])
                 return None
             out.extend(d["embedding"] for d in res["data"])
+        # 校验条数：DashScope 偶尔会少返回（空文本/超长会被跳过），
+        # 条数不一致会造成向量与 chunk 错位，比直接降级更危险，这里一律返回 None。
+        if len(out) != len(texts):
+            print(f"embedding 返回条数不匹配（{len(out)}/{len(texts)}），本次降级 sparse")
+            return None
         _cache_put(key, out)
         return out
     except Exception as e:

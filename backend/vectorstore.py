@@ -71,8 +71,11 @@ class VectorStore:
         self._dense = None
         if n > 0:
             embs = llm.embed_texts([t for (_, _, t, _) in self._flat])
-            if embs:
+            # 只在条数完全对齐时启用 dense，否则 self._dense[idxs] 会越界或错位
+            if embs and len(embs) == n:
                 self._dense = np.array(embs, dtype=np.float32)
+            elif embs:
+                print(f"embedding 条数不匹配（{len(embs)}/{n}），本次检索降级为纯 sparse")
 
     # ---------- 检索 ----------
     def search(self, query, top_k=6, scope=None):

@@ -425,7 +425,7 @@
         <!-- 小部件：图谱统计 -->
         <div class="mini-stats">
           <div class="mini-stat"><div class="ms-num">{{ graph.nodes.length }}</div><div class="ms-label">论文节点</div></div>
-          <div class="mini-stat"><div class="ms-num">{{ graph.links.length }}</div><div class="ms-label">引用连线</div></div>
+          <div class="mini-stat"><div class="ms-num">{{ graph.links.length }}</div><div class="ms-label">关系连线</div></div>
           <div class="mini-stat"><div class="ms-num">{{ (graph.cornerstone||[]).length }}</div><div class="ms-label">基石论文</div></div>
           <div class="mini-stat"><div class="ms-num">{{ (graph.derivative||[]).length }}</div><div class="ms-label">衍生论文</div></div>
         </div>
@@ -446,7 +446,7 @@
             <h4>🧩 边缘衍生论文</h4>
             <ul><li v-for="n in graph.derivative" :key="n.id">{{ n.title }}</li></ul>
             <h4>💡 图例</h4>
-            <p class="legend">节点=论文 · 连线=引用关系 · 圆圈大小=影响力；拖动可调整布局，滚轮缩放</p>
+            <p class="legend"><i class="lg-cite"></i>实线=引用关系　<i class="lg-ver"></i>虚线=同源版本（同一 arXiv 编号或标题高度相似）<br/>节点=论文 · 圆圈大小=影响力；拖动可调整布局，滚轮缩放</p>
           </div>
         </div>
         <div class="empty" v-if="!graph.nodes.length">上传 ≥2 篇有引用关系的论文后可生成引用图谱</div>
@@ -848,7 +848,13 @@ export default {
       if (this._graphChart) { this._graphChart.dispose(); }
       const chart = window.echarts.init(this.$refs.graphEl);
       const nodes = this.graph.nodes.map(n => ({ id: n.id, name: n.title.slice(0, 24), symbolSize: 22 }));
-      const links = this.graph.links.map(l => ({ source: l.source, target: l.target }));
+      // 引用边实线蓝色、同源版本边虚线灰色，一眼能分开
+      const links = this.graph.links.map(l => ({
+        source: l.source, target: l.target, value: l.type,
+        lineStyle: l.type === "version"
+          ? { type: "dashed", color: "#8b93ad", width: 1.2, curveness: 0.1 }
+          : { type: "solid", color: "#3b6fd4", width: 1.8, curveness: 0.2 }
+      }));
       chart.setOption({
         tooltip: { formatter: p => p.dataType === "node" ? (this.graph.nodes.find(x => x.id === p.data.id) || {}).title || p.data.name : "" },
         series: [{ type: "graph", layout: "force", roam: true, draggable: true, data: nodes, links,
@@ -1291,6 +1297,9 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .graph-side h4 { color: #3a4a7a; font-size: 14px; margin: 12px 0 6px; }
 .graph-side li { font-size: 13px; padding: 4px 0; color: #445; }
 .graph-side em { color: #a05a12; font-style: normal; font-size: 11px; }
+.legend i { display: inline-block; width: 20px; height: 0; margin-right: 4px; vertical-align: middle; }
+.lg-cite { border-top: 2px solid #3b6fd4; }
+.lg-ver { border-top: 1px dashed #8b93ad; }
 .legend { font-size: 12px; color: var(--sub); line-height: 1.7; background: #f6f8ff; padding: 8px 10px; border-radius: 8px; }
 .gen-box { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px; }
 .gen-box h4 { color: #3a4a7a; margin-bottom: 6px; }
