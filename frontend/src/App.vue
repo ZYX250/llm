@@ -304,14 +304,14 @@
               <div class="pi-meta">{{ readData.total_pages }} 页 · 每页概览 · 当前第 {{ readPage }} 页</div>
             </div>
             <div class="pi-tools">
-              <span class="font-ctl">
-                <button class="btn small" @click="changeFont(-1)">A-</button>
-                <span class="font-val">{{ fontSize }}px</span>
-                <button class="btn small" @click="changeFont(1)">A+</button>
+              <span class="font-ctl" title="正文字号">
+                <button class="font-btn sm" @click="changeFont(-1)" title="缩小字号">A</button>
+                <span class="font-val">{{ fontSize }}</span>
+                <button class="font-btn lg" @click="changeFont(1)" title="放大字号">A</button>
               </span>
               <span class="jump-ctl">
-                <input type="number" v-model.number="readJump" min="1" :max="readData.total_pages" class="jump-in" @keyup.enter="jumpToPage" />
-                <button class="btn small" @click="jumpToPage">跳页</button>
+                <input type="number" v-model.number="readJump" min="1" :max="readData.total_pages" class="jump-in" placeholder="页码" @keyup.enter="jumpToPage" />
+                <button class="font-btn go" @click="jumpToPage" title="跳转到该页">→</button>
               </span>
             </div>
           </div>
@@ -1170,10 +1170,18 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .paper-info-bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; background: linear-gradient(120deg,#f4f7ff,#f2f4ff); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin-bottom: 14px; }
 .pi-title { font-size: 15px; font-weight: 700; color: #2a3568; }
 .pi-meta { font-size: 12px; color: var(--sub); margin-top: 4px; }
-.pi-tools { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
-.font-ctl, .jump-ctl { display: flex; align-items: center; gap: 6px; }
-.font-val { font-size: 12px; color: var(--sub); min-width: 38px; text-align: center; }
-.jump-in { width: 64px; padding: 6px 8px; border: 1px solid #ccd3e6; border-radius: 8px; font-size: 13px; }
+.pi-tools { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.font-ctl, .jump-ctl { display: flex; align-items: center; gap: 5px; padding: 4px 6px; border-radius: 10px; background: #f7f9ff; border: 1px solid #e8edf9; }
+.font-btn { width: 26px; height: 26px; border-radius: 8px; border: 1px solid #dfe4f2; background: #fff; color: #5b6b9a; font-weight: 800; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .15s ease; }
+.font-btn:hover { background: #eef1ff; border-color: var(--c1); color: var(--c1); }
+.font-btn:active { transform: scale(.94); }
+.font-btn.sm { font-size: 11px; }
+.font-btn.lg { font-size: 16px; }
+.font-btn.go { border-color: var(--c1); background: linear-gradient(135deg,var(--c1),var(--c2)); color: #fff; font-size: 14px; }
+.font-btn.go:hover { filter: brightness(1.06); color: #fff; }
+.font-val { font-size: 12.5px; color: #5b6b9a; font-weight: 700; min-width: 20px; text-align: center; }
+.jump-in { width: 52px; padding: 5px 8px; border: 1px solid #dfe4f2; border-radius: 8px; font-size: 12.5px; text-align: center; color: #5b6b9a; background: #fff; }
+.jump-in::placeholder { color: #a9b1cd; font-size: 11.5px; }
 .jump-in:focus { outline: none; border-color: var(--c1); }
 
 .progress-wrap { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
