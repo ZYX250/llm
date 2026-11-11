@@ -227,11 +227,53 @@ def _locate_formula_pages(formulas, pages):
     return out
 
 
+# 版权/许可/arXiv 页眉等噪声行，不能当标题（v7 版的版权页就曾被误判成标题）
+TITLE_BLOCK_RE = re.compile(
+    r"(?i)(provided proper attribution|permission to reproduce|arxiv:\d|licensed under|"
+    r"all rights reserved|copyright|preprint|under review|www\.|http)"
+)
+
+
+def _is_boilerplate(t):
+    return bool(TITLE_BLOCK_RE.search(t or ""))
+
+
+def _page1_title(doc):
+    """取第 1 页字号最大的行作为标题，跳过版权声明、页眉、URL 等噪声行。"""
+    try:
+        d = doc[0].get_text("dict")
+    except Exception:
+        return ""
+    cands = []
+    for b in d.get("blocks", []):
+        if b.get("type") != 0:
+            continue
+        for l in b.get("lines", []):
+            spans = l.get("spans", [])
+            txt = re.sub(r"\s+", " ", "".join(s.get("text", "") for s in spans)).strip()
+            size = max([s.get("size", 0) for s in spans] or [0])
+            if len(txt) < 8 or len(txt) > 200 or not re.search(r"[A-Za-z]", txt):
+                continue
+            if _is_boilerplate(txt):
+                continue
+            cands.append((size, l["bbox"][1], txt))
+    if not cands:
+        return ""
+    max_size = max(c[0] for c in cands)
+    top = [c for c in cands if c[0] >= max_size - 1.5]
+    top.sort(key=lambda c: c[1])      # 同字号取最靠上的
+    return top[0][2]
+
+
 def _extract_metadata(full_text, doc):
     meta = {}
-    # 标题：取文档元数据标题或第一行
+    # 标题：优先 PDF 内嵌元数据，噪声值则回退到第 1 页最大字号行
     m = doc.metadata or {}
-    meta["title"] = (m.get("title") or "").strip() or (full_text.splitlines()[0] if full_text.splitlines() else "")
+    t = (m.get("title") or "").strip()
+    if t and not _is_boilerplate(t):
+        meta["title"] = t
+    else:
+        meta["title"] = _page1_title(doc) or (full_text.splitlines()[0] if full_text.splitlines() else "")
     # 摘要
     msum = re.search(r"(?is)abstract\s*[:\-]?\s*(.*?)(?=\n\s*(introduction|1\s|一、|\n\d\.))", full_text)
     meta["abstract"] = msum.group(1).strip()[:1200] if msum else ""
@@ -242,25 +284,73 @@ def _extract_metadata(full_text, doc):
     return meta
 
 
-def _extract_references(full_text, pages_text):
+# 参考文献标题必须独占一行，避免命中图注里的 "references listed at the end of this caption"
+REF_HEAD_RE = re.compile(r"(?im)^[ \t]*(references|bibliography|参考文献)[ \t]*$")
+# 无编号（作者-年份）条目的切分锚点：行首为「名 姓,」或「名 姓 大写词」
+REF_START_RE = re.compile(r"\n(?=[A-Z][A-Za-z'\-]+(?:,| and | [A-Z][A-Za-z'\-]+(?:,|\.)))")
+
+
+def _extract_references_impl(full_text, pages_text):
+    """抽参考文献，兼容两种主流排版：
+    1) 编号式 [1] ...（多数 CV/NLP 会议论文）；
+    2) 作者-年份式（无编号，如 BERT/ACL 格式），按行首姓名切分。
+    """
     refs = []
-    # 定位 References / REFERENCES / 参考文献
-    m = re.search(r"(?i)\breferences?\s*\n", full_text)
+    seg = ""
+    m = REF_HEAD_RE.search(full_text)
     if not m:
-        m = re.search(r"(?i)\n\s*(?:references|bibliography)\s*\n", full_text)
+        # 双栏排版下 get_text(sort=True) 会把 "References" 与右栏文字排进同一行，
+        # 独占行匹配落空；此时从后往前找 "references"，要求其后紧跟条目特征（编号或年份）
+        for mm in reversed(list(re.finditer(r"(?i)\breferences\b", full_text))):
+            tail = full_text[mm.end():mm.end() + 1200]
+            if re.search(r"\[\s*1\s*\]|(?:19|20)\d{2}", tail):
+                m = mm
+                break
+    if not m:
+        m = re.search(r"(?i)\breferences?\s*\n", full_text)
     if m:
-        seg = full_text[m.end():]
-        seg = seg[:20000]
-        # 按 [n] 条目切分
-        for mm in re.finditer(r"\[(\d+)\]\s*(.+)", seg):
-            refs.append({"idx": mm.group(1), "text": mm.group(2).strip()[:400]})
+        seg = full_text[m.end():][:60000]   # 参考文献段落上限，60000 可覆盖 60+ 页论文的全量条目
+        numbered = list(re.finditer(r"\[(\d+)\]\s*(.+)", seg))
+        if numbered:
+            for mm in numbered:
+                refs.append({"idx": mm.group(1), "text": mm.group(2).strip()[:400]})
+
+    # 编号式抽不到 -> 按作者-年份条目切分（BERT 这类格式）
+    if not refs and seg:
+        parts = [re.sub(r"\s+", " ", p).strip() for p in REF_START_RE.split(seg)]
+        parts = [p for p in parts if len(p) > 20]
+        for i, p in enumerate(parts):
+            refs.append({"idx": str(i + 1), "text": p[:400]})
+        # 切分不可靠时保留整段：引用图谱只需能匹配到被引标题，条数不准好过全空
+        if len(refs) < 3:
+            refs = [{"idx": "0", "text": re.sub(r"\s+", " ", seg)[:8000]}]
+
     # 页级扫描补充
     if not refs:
         for pno, t in enumerate(pages_text):
-            if re.search(r"(?i)\breferences?\b", t):
+            if re.search(r"(?im)^[ \t]*(references|bibliography)[ \t]*$", t):
                 for mm in re.finditer(r"\[(\d+)\]\s*(.+)", t):
                     refs.append({"idx": mm.group(1), "text": mm.group(2).strip()[:400]})
     return refs
+
+
+def _extract_references(full_text, pages_text, doc=None):
+    """参考文献抽取入口。
+
+    extract_text 为保阅读顺序用了 sort=True，双栏论文会把左右栏文字交错排在同一行，
+    导致 "References" 标题不再独占一行、条目被切碎（实测 BERT 由 63 条降到 19 条）。
+    条数偏少时用末尾 10 页的无排序文本重抽一次，取更完整的结果。
+    """
+    refs = _extract_references_impl(full_text, pages_text)
+    if doc is None:
+        return refs
+    start = max(0, len(doc) - 14)
+    tail_pages = [doc[i].get_text().strip() for i in range(start, len(doc))]
+    tail_text = "\n".join(tail_pages)
+    if not tail_text.strip():
+        return refs
+    alt = _extract_references_impl(tail_text, tail_pages)
+    return alt if len(alt) > len(refs) else refs
 
 
 # ---------- 分块 chunking ----------
@@ -295,7 +385,7 @@ def parse_pdf(path, progress_cb=None):
     tables = _extract_tables(doc)
     formulas, formula_pages = _extract_formulas(full_text, doc, pages)
     meta = _extract_metadata(full_text, doc)
-    refs = _extract_references(full_text, pages)
+    refs = _extract_references(full_text, pages, doc)
     chunks = chunk_text(pages)
     doc.close()
     return {
