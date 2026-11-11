@@ -275,6 +275,109 @@ def paper_read(pid: str, page: int = 1, size: int = 2):
             "headings": enriched}
 
 
+# ---------------- 每页概览（阅读页目录用） ----------------
+_PAGE_SUMS = {}   # pid -> {"source": "llm"/"extractive", "items": [{"page","summary"}]}
+
+
+def _paper_dir(pid):
+    d = PAPERS_DIR / pid
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def _extractive_page_sum(text):
+    """兜底摘要：取该页第一句可读正文，跳过邮箱/版权/页码等噪声行。"""
+    for line in [l.strip() for l in (text or "").splitlines() if l.strip()]:
+        if len(line) < 6:
+            continue
+        if "@" in line and len(line) < 80:                     # 作者邮箱行
+            continue
+        if re.match(r"^(arxiv|doi|copyright|provided proper|licensed under)", line, re.I):
+            continue
+        s = re.split(r"[。！？]", line)[0]
+        s = re.split(r"\.\s+", s)[0]
+        s = re.sub(r"\s+", " ", s).strip()
+        return (s[:38] + "…") if len(s) > 38 else s
+    return "（本页无正文）"
+
+
+@app.get("/papers/{pid}/page-summaries")
+def page_summaries(pid: str):
+    """阅读页目录：每页一句概览。LLM 不可用时退回抽取式摘要，不阻塞阅读。"""
+    parse = CACHE.get(pid)
+    if not parse:
+        return JSONResponse({"ok": False, "msg": "未解析"}, status_code=404)
+    if pid in _PAGE_SUMS:
+        c = _PAGE_SUMS[pid]
+        return {"ok": True, "source": c["source"], "items": c["items"]}
+    f = _paper_dir(pid) / "page_summaries.json"
+    if f.exists():
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                c = json.load(fp)
+            _PAGE_SUMS[pid] = c
+            return {"ok": True, "source": c["source"], "items": c["items"]}
+        except Exception:
+            pass
+
+    by_page = {}
+    for ch in parse["chunks"]:
+        by_page.setdefault(ch["page"], []).append(ch["text"])
+    total = parse["page_count"] or max(by_page.keys(), default=1)
+
+    # 先把兜底结果算好：LLM 失败/超时就直接用，保证目录永远有内容
+    fallback = [{"page": p, "summary": _extractive_page_sum("\n".join(by_page.get(p, [])))}
+                for p in range(1, total + 1)]
+    items, source = fallback, "extractive"
+
+    try:
+        if total > 40:      # 页数过多时一次性 prompt 会撑爆上下文，直接走抽取式概览
+            raise RuntimeError(f"页数过多（{total} 页），跳过 LLM 概览")
+        blocks = []
+        for p in range(1, total + 1):
+            t = re.sub(r"\s+", " ", "\n".join(by_page.get(p, []))).strip()[:460]
+            blocks.append(f"[第{p}页] {t or '（空页）'}")
+        prompt = (
+            f"论文标题：{papers_meta.get(pid, {}).get('title', '')}\n"
+            f"全文共 {total} 页。请为每一页各写一句中文概览，每句不超过 18 个字，"
+            "只说明该页在讲什么（背景/方法/实验/结论等），不要展开、不要编号。\n"
+            f'严格按 JSON 输出：{{"summaries":[{{"page":1,"summary":"..."}}]}}，需覆盖第 1 到第 {total} 页。\n\n'
+            + "\n".join(blocks)
+        )
+        raw = llm.chat(
+            [{"role": "system", "content": "你是学术论文导读助手，输出简洁准确，不加客套话。"},
+             {"role": "user", "content": prompt}],
+            temperature=0.2, max_tokens=1500, json_mode=True,
+        )
+        obj = None
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            m = re.search(r"\{.*\}", raw or "", re.S)
+            obj = json.loads(m.group(0)) if m else None
+        got = {}
+        for x in (obj or {}).get("summaries", []):
+            try:
+                got[int(x["page"])] = str(x["summary"]).strip()[:40]
+            except Exception:
+                continue
+        # 覆盖过半页数才认为 LLM 结果可用，否则保留抽取式
+        if len(got) >= max(3, total // 2):
+            items = [{"page": p, "summary": got.get(p) or fallback[p - 1]["summary"]}
+                     for p in range(1, total + 1)]
+            source = "llm"
+    except Exception as e:
+        print("每页概览生成失败，退回抽取式：", e)
+
+    _PAGE_SUMS[pid] = {"source": source, "items": items}
+    try:
+        with open(f, "w", encoding="utf-8") as fp:
+            json.dump(_PAGE_SUMS[pid], fp, ensure_ascii=False)
+    except Exception:
+        pass
+    return {"ok": True, "source": source, "items": items}
+
+
 @app.get("/papers/{pid}/locate")
 def locate_heading(pid: str, q: str = ""):
     """按标题文本在已解析正文中搜索真实所在页码（比字体检测更准）。"""

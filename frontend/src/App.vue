@@ -301,7 +301,7 @@
           <div class="paper-info-bar">
             <div class="pi-left">
               <div class="pi-title">{{ readData.title || readPaper }}</div>
-              <div class="pi-meta">{{ readData.total_pages }} 页 · {{ (readData.headings||[]).length }} 个章节 · 当前第 {{ readPage }} 页</div>
+              <div class="pi-meta">{{ readData.total_pages }} 页 · 每页概览 · 当前第 {{ readPage }} 页</div>
             </div>
             <div class="pi-tools">
               <span class="font-ctl">
@@ -325,12 +325,11 @@
           <div class="read-layout">
             <div class="read-toc">
               <div class="toc-title">📑 目录导航</div>
-              <div v-for="(h,i) in filteredHeadings" :key="h.title+h.page" class="toc-item" :class="['tlv'+h.level, {cur: h.title===activeToc}]" @click="gotoToc(h)">
-                <span class="toc-idx">{{ i+1 }}</span>
-                <span class="toc-t">{{ h.title }}</span>
-                <span class="toc-p">p.{{ h.real_page || h.page }}</span>
+              <div v-for="h in tocEntries" :key="h.page" class="toc-item" :class="{cur: h.page===readPage}" @click="gotoPage(h.page)">
+                <span class="toc-idx">{{ h.page }}</span>
+                <span class="toc-t">{{ h.title || "概览生成中…" }}</span>
               </div>
-              <div class="toc-empty" v-if="!filteredHeadings.length">未检测到章节标题</div>
+              <div class="toc-empty" v-if="!tocEntries.length">尚未读取论文页信息</div>
             </div>
             <div class="read-main">
               <div class="read-toolbar">
@@ -599,7 +598,7 @@ export default {
       papers: [], dedupNotice: "", uploading: false, uploadTasks: [],
       parse: null, parseTab: "标题树", parseTabs: ["标题树", "公式", "表格", "参考文献"],
       qaQuery: "", qaAnswer: "", qaStreamText: "", qaSources: [], qaScope: [], qaLoading: false, qaConfidence: "", qaVerify: null,
-      readPaper: "", readData: null, readPage: 1, readCurrent: "", readTranslated: "", mode: "single", translating: false, fontSize: 14, readJump: 1,
+      readPaper: "", readData: null, readPage: 1, readCurrent: "", readTranslated: "", mode: "single", translating: false, fontSize: 14, readJump: 1, pageSums: [],
       searchQuery: "", searchResults: [],
       graph: { nodes: [], links: [], cornerstone: [], derivative: [] },
       summaryText: "", futureText: "",
@@ -621,6 +620,12 @@ export default {
     dedupCount() { return this.dedupNotice ? 1 : 0; },
     maxPages() { return this.papers.reduce((m, p) => Math.max(m, p.page_count || 0), 0); },
     avgPages() { return this.papers.length ? Math.round(this.totalPages / this.papers.length) : 0; },
+    // 目录改为「每页一条概览」：概览未返回时先按页占位，不再堆几百个章节
+    tocEntries() {
+      if (this.pageSums.length) return this.pageSums.map(s => ({ page: s.page, title: s.summary }));
+      const total = (this.readData && this.readData.total_pages) || 0;
+      return Array.from({ length: total }, (_, i) => ({ page: i + 1, title: "" }));
+    },
     filteredHeadings() {
       return ((this.readData && this.readData.headings) || []).filter(h => {
         const t = (h.title || "").trim();
@@ -715,7 +720,7 @@ export default {
       if (!r.ok) return alert(r.msg || "重新解析失败");
       this.uploadTasks.push({ name: (p && p.title) || "重新解析", pid: id, progress: 0, status: "parsing" });
       await this.pollUploads();
-      if (this.readPaper === id) { this.readPage = 1; await this.fetchRead(); this.readTranslated = ""; }
+      if (this.readPaper === id) { this.readPage = 1; await this.fetchRead(); await this.fetchPageSums(); this.readTranslated = ""; }
     },
     async pollUploads() {
       const pending = () => this.uploadTasks.some(t => t.status === "parsing");
@@ -771,10 +776,18 @@ export default {
       }
       this.qaLoading = false;
     },
-    async loadRead() { if (!this.readPaper) return; this.readPage = 1; this.readJump = 1; await this.fetchRead(); },
+    async loadRead() { if (!this.readPaper) return; this.readPage = 1; this.readJump = 1; await this.fetchRead(); await this.fetchPageSums(); },
     gotoReadPaper(id) { this.readPaper = id; this.loadRead(); },
     changeFont(d) { this.fontSize = Math.min(22, Math.max(12, this.fontSize + d)); },
     jumpToPage() { if (this.readData) this.gotoPage(this.readJump); },
+    async fetchPageSums() {
+      this.pageSums = [];
+      if (!this.readPaper) return;
+      try {
+        const r = await this.api(`/papers/${this.readPaper}/page-summaries`);
+        if (r && r.ok) this.pageSums = r.items || [];
+      } catch (e) { /* 概览失败不影响阅读正文，目录退回按页占位 */ }
+    },
     async fetchRead() {
       const r = await this.api(`/papers/${this.readPaper}/read?page=${this.readPage}&size=1`);
       if (!r.ok) return;
@@ -1171,9 +1184,9 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .read-toc { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: linear-gradient(160deg,#ffffff,#f8f9ff); max-height: 70vh; overflow-y: auto; text-align: left; }
 .toc-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 800; color: var(--c1); margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #eef1fb; letter-spacing: 1px; }
 .toc-title::after { content: ""; flex: 1; height: 2px; border-radius: 2px; background: linear-gradient(90deg,#eef1fb,#ffffff); }
-.toc-item { display: flex; align-items: center; gap: 8px; text-align: left; font-size: 12.5px; padding: 5px 10px; margin: 1px 0; border-radius: 8px; cursor: pointer; color: #4a5a8a; line-height: 1.5; transition: all .15s ease; position: relative; }
-.toc-idx { flex-shrink: 0; width: 18px; height: 18px; border-radius: 6px; background: #eef1fb; color: var(--c1); font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.toc-t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toc-item { display: flex; align-items: flex-start; gap: 8px; text-align: left; font-size: 12.5px; padding: 6px 10px; margin: 1px 0; border-radius: 8px; cursor: pointer; color: #4a5a8a; line-height: 1.5; transition: all .15s ease; position: relative; }
+.toc-idx { flex-shrink: 0; width: 18px; height: 18px; margin-top: 1px; border-radius: 6px; background: #eef1fb; color: var(--c1); font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.toc-t { flex: 1; min-width: 0; overflow: hidden; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
 .toc-p { flex-shrink: 0; font-size: 10.5px; color: #9aa3c4; font-weight: 500; }
 .toc-item.cur .toc-idx { background: linear-gradient(135deg,var(--c1),var(--c2)); color: #fff; }
 .toc-item.cur .toc-p { color: var(--c1); }
