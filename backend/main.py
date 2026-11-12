@@ -44,7 +44,8 @@ SESSIONS = {}      # session_id -> [messages]  Agent 会话记忆
 
 @asynccontextmanager
 async def lifespan(_app):
-    load_state()
+    load_state()   # 只读盘，毫秒级
+    threading.Thread(target=_restore_vectors, daemon=True).start()   # 向量库后台重建
     yield
 
 
@@ -87,7 +88,9 @@ def _save_meta():
 
 
 def load_state():
-    """启动时从磁盘恢复论文元数据、解析结果与向量库。"""
+    """启动时从磁盘恢复元数据与解析结果（只读盘，毫秒级）。
+    向量库重建交给后台线程，否则全库 embedding 会让 startup 卡住数十秒，
+    uvicorn 端口已在监听但请求全部被拒（前端代理报 ECONNREFUSED）。"""
     if META_PATH.exists():
         try:
             with open(META_PATH, "r", encoding="utf-8") as f:
@@ -100,10 +103,21 @@ def load_state():
                     parse = json.load(f)
                 papers_meta[pid] = p
                 CACHE[pid] = parse
-                vs.add_paper(pid, p.get("title", ""), parse.get("chunks", []))
-            print(f"[恢复] 已加载 {len(papers_meta)} 篇论文与向量库")
+            print(f"[恢复] 已加载 {len(papers_meta)} 篇论文元数据")
         except Exception as e:
             print("状态恢复失败：", e)
+
+
+def _restore_vectors():
+    """后台重建向量索引：全库 embedding 需数十秒，不能在 startup 里同步跑，
+    否则端口已在监听但应用未 ready，前端代理会报 ECONNREFUSED。"""
+    try:
+        items = [(pid, p.get("title", ""), (CACHE.get(pid) or {}).get("chunks", []))
+                 for pid, p in papers_meta.items()]
+        vs.add_papers_bulk(items)
+        print(f"[恢复] 向量索引就绪：{len(items)} 篇 / {len(vs._flat)} chunks")
+    except Exception as e:
+        print("向量恢复失败：", e)
 
 
 # ---------------- 工具函数 ----------------

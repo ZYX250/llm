@@ -38,6 +38,13 @@ class VectorStore:
         self.papers[paper_id] = {"title": title, "chunks": chunks}
         self._rebuild()
 
+    def add_papers_bulk(self, items):
+        """批量恢复（启动时用）：只重建一次索引。
+        逐篇 add_paper 会让每次 _rebuild 都重算全库 embedding，n 篇就是 O(n²) 次调用。"""
+        for paper_id, title, chunks in items:
+            self.papers[paper_id] = {"title": title, "chunks": chunks}
+        self._rebuild()
+
     def remove_paper(self, paper_id):
         self.papers.pop(paper_id, None)
         self._rebuild()
