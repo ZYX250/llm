@@ -51,7 +51,7 @@ python start.py
 自动拉起后端(8000) + 前端(5173)，就绪后访问 `http://localhost:5173`，按 `Ctrl+C` 停止。
 
 ### 方式二：两个终端
-**后端**（`backend` 目录）：
+**后端**（必须先进入 `backend` 目录，否则会报 `Could not import module "main"`）：
 ```cmd
 cd D:\vue\llm_competition\backend
 .venv\Scripts\activate
@@ -65,6 +65,22 @@ cd D:\vue\llm_competition\frontend
 npm run dev
 ```
 访问：`http://localhost:5173`
+
+### 方式三：只启动后端
+前端已经在跑、只想重启后端时，直接双击项目根目录的 `start-backend.bat`（或执行 `.\start-backend.ps1`）。
+脚本会自动切到 `backend` 目录、调用虚拟环境里的 python，并在启动前检查 8000 端口是否被占用。
+加 `-NoReload` 可关闭热重载（答辩演示用，启动更快更稳）：
+
+```powershell
+.\start-backend.ps1 -NoReload
+```
+
+### 常见启动错误
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `Error loading ASGI app. Could not import module "main"` | 在项目根目录执行了 `uvicorn main:app`，而 `main.py` 在 `backend\` 下 | 先 `cd backend`，或直接 `python start.py` / `start-backend.bat` |
+| 启动时 `[Errno 10048] address already in use` | 上次加载失败的 uvicorn 未退出，以 `Bound` 状态占着 8000 | `Get-NetTCPConnection -LocalPort 8000` 查 PID，再 `Stop-Process -Id <PID>` |
+| 前端代理报 `ECONNREFUSED 127.0.0.1:8000` | 后端仍在启动阶段（读元数据、后台重建向量索引） | 等控制台出现 `Application startup complete` 和 `[恢复] 向量索引就绪`，通常 10 秒内 |
 
 > 首次需 `pip install -r requirements.txt` 与 `npm install`；`.env` 中必须配置 `DASHSCOPE_API_KEY`。
 
