@@ -6,12 +6,23 @@ vectorstore.py — 轻量向量库 + 混合检索(RAG)
 内存运行，覆盖单篇与多篇跨文献问答。
 """
 import math
+import os
 import re
 from collections import Counter
 import numpy as np
 import llm
 
 RRF_K = 60   # RRF 平滑常数（Cormack 等 2009 的经验值）
+
+# 每篇论文的向量持久化根目录（由 main.py 设为 papers 目录）。
+# 有了它，删除/新增论文只做内存拼接，不必重新调用 embedding。
+VEC_DIR = None
+EMB_DIM = 1024
+
+
+def set_vector_dir(path):
+    global VEC_DIR
+    VEC_DIR = str(path) if path else None
 
 
 def _tokenize(text):
@@ -32,6 +43,8 @@ class VectorStore:
         self._dense = None
         self._idf = {}
         self._vocab = set()
+        self._dense_map = {}     # pid -> 该篇全部 chunk 的向量（行序与 chunks 一致）
+        self._vec_failed = set() # 本进程内算不出来的论文，避免每次 rebuild 反复等接口超时
 
     # ---------- 管理 ----------
     def add_paper(self, paper_id, title, chunks):
@@ -47,15 +60,51 @@ class VectorStore:
 
     def remove_paper(self, paper_id):
         self.papers.pop(paper_id, None)
+        # 该篇向量直接丢弃，其余篇的向量仍在内存里，rebuild 只做拼接（毫秒级）
+        self._dense_map.pop(paper_id, None)
+        self._vec_failed.discard(paper_id)
         self._rebuild()
 
     def clear(self):
         self.papers = {}
+        self._dense_map = {}
+        self._vec_failed = set()
         self._rebuild()
 
     def list_papers(self):
         return [{"id": pid, "title": p["title"], "n_chunks": len(p["chunks"])}
                 for pid, p in self.papers.items()]
+
+    # ---------- 向量持久化 ----------
+    def _vec_path(self, pid):
+        if not VEC_DIR:
+            return None
+        return os.path.join(VEC_DIR, pid, "vectors.npy")
+
+    def _load_vectors(self, pid, n_chunks):
+        """读该篇落盘的向量；条数/维度不符一律视为未命中（防止 chunk 变了导致错位）。"""
+        p = self._vec_path(pid)
+        if not p or not os.path.exists(p):
+            return None
+        try:
+            arr = np.load(p)
+            if arr.shape != (n_chunks, EMB_DIM):
+                print(f"[向量] {pid} 条数不符（{arr.shape[0]}/{n_chunks}），重新计算")
+                return None
+            return arr.astype(np.float32)
+        except Exception as e:
+            print(f"[向量] {pid} 读取失败：{e}")
+            return None
+
+    def _save_vectors(self, pid, arr):
+        p = self._vec_path(pid)
+        if not p:
+            return
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            np.save(p, arr)
+        except Exception as e:
+            print(f"[向量] {pid} 保存失败：{e}")
 
     # ---------- 索引 ----------
     def _rebuild(self):
@@ -77,12 +126,32 @@ class VectorStore:
         self._idf = {t: math.log((n + 1) / (d + 1)) + 1 for t, d in df.items()}
         self._dense = None
         if n > 0:
-            embs = llm.embed_texts([t for (_, _, t, _) in self._flat])
-            # 只在条数完全对齐时启用 dense，否则 self._dense[idxs] 会越界或错位
-            if embs and len(embs) == n:
-                self._dense = np.array(embs, dtype=np.float32)
-            elif embs:
-                print(f"embedding 条数不匹配（{len(embs)}/{n}），本次检索降级为纯 sparse")
+            # 补齐每篇向量：内存 → 磁盘 .npy → 才调接口。
+            # 删除/新增论文时其余篇都已有缓存，这里不会产生任何网络请求。
+            for pid, p in self.papers.items():
+                if pid in self._dense_map or pid in self._vec_failed:
+                    continue
+                n_ch = len(p["chunks"])
+                if n_ch == 0:
+                    continue
+                arr = self._load_vectors(pid, n_ch)
+                if arr is None:
+                    embs = llm.embed_texts([c["text"] for c in p["chunks"]])
+                    if embs and len(embs) == n_ch:
+                        arr = np.array(embs, dtype=np.float32)
+                        self._save_vectors(pid, arr)
+                if arr is None:
+                    self._vec_failed.add(pid)   # 本次进程内不再重试，避免反复等超时
+                else:
+                    self._dense_map[pid] = arr
+
+            ready = [pid for pid, p in self.papers.items() if p["chunks"]]
+            if all(pid in self._dense_map for pid in ready):
+                # 拼接顺序与 self._flat 一致（同样按 self.papers 迭代）
+                self._dense = np.vstack([self._dense_map[pid] for pid in ready])
+            elif ready:
+                missing = [pid for pid in ready if pid not in self._dense_map]
+                print(f"dense 缺失 {len(missing)} 篇（{missing}），本次检索降级为纯 sparse")
 
     # ---------- 检索 ----------
     def search(self, query, top_k=6, scope=None):

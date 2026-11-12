@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import llm
 import pdf_parser
 import verify
+import vectorstore
 from vectorstore import VectorStore
 import graph_engine
 import viz_engine
@@ -36,6 +37,7 @@ META_PATH = PAPERS_DIR / "meta.json"
 
 # ---------------- 全局状态 ----------------
 vs = VectorStore(dense_weight=0.6)
+vectorstore.set_vector_dir(PAPERS_DIR)   # 向量按篇落盘到 papers/<pid>/vectors.npy
 papers_meta = {}   # id -> {id, filename, path, title, page_count, used_ocr, char_count, uploaded_at}
 CACHE = {}         # id -> 解析结果(大对象，含chunks)
 TASKS = {}         # id -> {status, progress, error}  异步解析任务

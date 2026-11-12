@@ -171,46 +171,81 @@ def stream_chat(messages, model=None, temperature=0.3):
                 continue
 
 
-def embed_texts(texts):
-    """批量文本向量化（含缓存）。失败返回 None，调用方应降级为 sparse。
+_EMB_MEM = {}   # 单条文本 -> 向量（进程内）。增删论文时只需算增量，不必全库重算
 
-    注意：DashScope 兼容模式单次 input 有条数上限（实测 120 条整体失败、10 条正常），
-    所以这里按 10 条分批；任意一批失败就返回 None，由上层降级为纯 sparse。
+
+def embed_texts(texts):
+    """批量文本向量化（两级缓存）。失败返回 None，调用方应降级为 sparse。
+
+    1) 进程内按单条文本缓存：删除/新增论文只会重算涉及的 chunk，其余直接命中；
+       旧实现按整批文本做 key，删一篇后批次全变，导致缓存 100% 失效、删除要等数十秒。
+    2) 磁盘按整批缓存：进程重启后同一批文本仍可免调用。
+    注意 DashScope 兼容模式单次 input 有条数上限（实测 120 条整体失败、10 条正常），
+    因此按 10 条分批；任意一批失败就返回 None，由上层降级为纯 sparse。
     """
     if not API_KEY or not texts:
         return None
-    key = hashlib.md5(json.dumps(
-        {"m": EMB_MODEL, "v": 2, "n": len(texts), "s": texts},
-        ensure_ascii=False, sort_keys=True
-    ).encode("utf-8")).hexdigest()
-    cached = _cache_get(key)
-    if cached is not None:
-        return cached
-    out = []
-    batch = 10
-    try:
-        for i in range(0, len(texts), batch):
-            part = texts[i:i + batch]
-            resp = requests.post(
-                EMB_URL, headers=_headers(),
-                json={"model": EMB_MODEL, "input": part, "dimensions": 1024},
-                timeout=120,
-            )
-            res = resp.json()
-            if "data" not in res:
-                print("embedding 批次失败(将降级sparse)：", str(res)[:200])
+
+    # 只收集尚未缓存的文本，并去重（不同页可能出现相同 chunk）
+    miss, seen = [], set()
+    for t in texts:
+        if t not in _EMB_MEM and t not in seen:
+            seen.add(t)
+            miss.append(t)
+
+    if miss:
+        key = hashlib.md5(json.dumps(
+            {"m": EMB_MODEL, "v": 2, "n": len(miss), "s": miss},
+            ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")).hexdigest()
+        cached = _cache_get(key)
+        if cached is not None and len(cached) == len(miss):
+            for t, e in zip(miss, cached):
+                _EMB_MEM[t] = e
+        else:
+            out = []
+            batch = 10
+            failed_batch = None
+            for i in range(0, len(miss), batch):
+                part = miss[i:i + batch]
+                ok = False
+                last_err = None
+                for _attempt in range(2):
+                    try:
+                        resp = requests.post(
+                            EMB_URL, headers=_headers(),
+                            json={"model": EMB_MODEL, "input": part, "dimensions": 1024},
+                            timeout=60,
+                        )
+                        res = resp.json()
+                        if "data" in res and len(res["data"]) == len(part):
+                            # 每批成功立即写入内存缓存：后面即使断连，已算好的部分也不会白丢
+                            for t, d in zip(part, res["data"]):
+                                _EMB_MEM[t] = d["embedding"]
+                            out.extend(d["embedding"] for d in res["data"])
+                            ok = True
+                            break
+                        last_err = str(res)[:150]
+                    except Exception as e:
+                        last_err = f"{type(e).__name__}: {e}"
+                        time.sleep(0.5)
+                if not ok:
+                    failed_batch = i // batch + 1
+                    break
+            if failed_batch is not None:
+                print(f"embedding 第 {failed_batch} 批失败（已缓存 {len(out)}/{len(miss)} 条），本次降级 sparse：{last_err}")
                 return None
-            out.extend(d["embedding"] for d in res["data"])
-        # 校验条数：DashScope 偶尔会少返回（空文本/超长会被跳过），
-        # 条数不一致会造成向量与 chunk 错位，比直接降级更危险，这里一律返回 None。
-        if len(out) != len(texts):
-            print(f"embedding 返回条数不匹配（{len(out)}/{len(texts)}），本次降级 sparse")
-            return None
-        _cache_put(key, out)
-        return out
-    except Exception as e:
-        print("embedding 失败(将降级sparse)：", e)
+            # 校验条数：DashScope 偶尔会少返回（空文本/超长会被跳过），
+            # 条数不一致会造成向量与 chunk 错位，比直接降级更危险，这里一律返回 None。
+            if len(out) != len(miss):
+                print(f"embedding 返回条数不匹配（{len(out)}/{len(miss)}），本次降级 sparse")
+                return None
+            _cache_put(key, out)
+
+    vecs = [_EMB_MEM.get(t) for t in texts]
+    if any(v is None for v in vecs):
         return None
+    return vecs
 
 
 def embed_text(text):
