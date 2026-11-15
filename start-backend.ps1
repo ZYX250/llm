@@ -19,7 +19,10 @@ if (-not (Test-Path -LiteralPath $python)) {
     exit 1
 }
 
-$busy = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+# 排除 TimeWait/CloseWait 等已关闭连接残留：它们不影响新进程 bind。
+# 同时不能只查 -State Listen：uvicorn 先 bind 再 import app，加载失败会留下 Bound 状态。
+$busy = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue |
+    Where-Object { $_.State -notin @("TimeWait", "CloseWait", "FinWait1", "FinWait2", "LastAck") }
 if ($busy) {
     # 注意不能只查 -State Listen：uvicorn 是先 bind 再 import app，
     # 若 import 失败进程会留下 Bound 状态占着端口，只查 Listen 会漏判

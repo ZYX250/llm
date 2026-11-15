@@ -13,6 +13,8 @@
 llm_competition/
 ├── start.py             # 一键启动（后端+前端同时拉起，Ctrl+C 停止）
 ├── pack.ps1             # 打包提交 ZIP（排除 .env/.venv/node_modules/缓存/_old，含泄漏检查）
+├── deploy_server.sh     # 云服务器(Ubuntu)一键部署：nginx 反代 + systemd 自启（公网常驻演示）
+├── deploy_demo.ps1      # 本地 Windows 一键演示（含 ngrok 隧道，适合现场答辩）
 ├── README.md
 ├── backend/
 │   ├── main.py            # FastAPI 应用与全部路由（含持久化/异步解析/Agent多步）
@@ -88,7 +90,7 @@ npm run dev
 | 模块 | 界面 Tab | 后端接口 | 说明 |
 |---|---|---|---|
 | 模块一 · PDF管理与细粒度解析 | 📁 文献库 | `/upload` `/parse/{id}/status` `/papers/{id}/parse` | 批量上传、**异步解析+进度条**、语义去重、扫描件OCR、标题树/表格/公式/参考文献 |
-| 模块二 · 抗幻觉知识问答 | 💬 智能问答 | `/qa` `/qa/stream` | 混合检索 RAG，流式回答 + 原文溯源锚点 + **置信度分级** + 抗幻觉护栏 |
+| 模块二 · 抗幻觉知识问答 | 💬 智能问答 | `/qa` `/qa/stream` | 混合检索 RAG（RRF 融合定序）+ 程序判定(verify) 抗幻觉 + 流式回答 + `[1][2]` 溯源编号 + **置信度分级** |
 | 模块三 · 版式感知阅读翻译 | 📖 双语阅读 | `/papers/{id}/read` `/translate` | 分页阅读、标题树导航、中英对照、字号/跳页、整篇翻译 |
 | 模块四 · 论文检索追踪 | 🔍 检索追踪 | `/search/arxiv` | arXiv 检索、GitHub可复现标记、个性化推荐、结果画像 |
 | 模块五 · 引用图谱与综述 | 🕸 引用图谱 | `/graph` `/graph/summary` | 引用拓扑图(ECharts)、基石/衍生论文、PageRank影响力条、综述+Future Work |
@@ -173,6 +175,27 @@ curl "http://127.0.0.1:8000/reviewer/info?token=<TOKEN>"
 未配置 `REVIEWER_TOKEN` 时上述端点返回 503（"评审模式未启用"），不泄露任何内部信息。
 对外演示（隧道/公网）时把 `ALLOW_ORIGINS` 设为 `*`，服务会自动关闭 `allow_credentials`，
 避免 `allow_origins=["*"]` 与凭证共用这个浏览器禁止的非法组合。
+
+## 部署到云服务器（公网常驻演示）
+
+满足"评审期间须保持服务可用"：把服务部署到一台常开的云服务器，由 systemd 托管（开机自启、崩溃自愈），nginx 反代 `/api`，评委只用固定公网地址即可访问，**无需你本地电脑开机**。
+
+前置：Ubuntu 22.04 云服务器（2 核 2G 足够，LLM 走 DashScope 云端 API 无需 GPU）；云控制台安全组放行 22 与 80 入站。
+
+```bash
+# 1. 先把本项目上传到服务器（排除本地虚拟环境与缓存；papers/ 数据会随 rsync 一起拷贝）
+rsync -avz --exclude '.venv' --exclude 'node_modules' --exclude '.cache' \
+  /path/to/llm_competition/ root@<服务器IP>:/opt/llm_competition/
+
+# 2. 在服务器上以 root 执行一键部署（交互要求输入 DASHSCOPE_API_KEY，并自动生成 REVIEWER_TOKEN）
+sudo bash /opt/llm_competition/deploy_server.sh
+```
+
+脚本完成后会打印：
+- 评委演示地址：`http://<服务器公网IP>/`
+- 评审只读模式：`http://<服务器公网IP>/api/reviewer/info?token=<自动生成的令牌>`
+
+后端 `lifespan` 启动时自动加载 `papers/` 下已打包的论文，评委打开即有数据；服务以 systemd 托管，重启/崩溃自动恢复，无需守着。
 
 ## 团队信息
 
