@@ -484,8 +484,11 @@
             <button v-for="s in topoPresets" :key="s" class="chip" @click="topoPrompt=s">{{ s }}</button>
           </div>
           <textarea v-model="topoPrompt" class="txt big" placeholder="描述要绘制的架构/拓扑，例如：一个RAG检索增强生成流程图"></textarea>
-          <button class="btn primary" :disabled="!topoPrompt" @click="genTopology">生成绘图脚本</button>
-          <div v-if="topologyScript" class="out-wrap"><pre class="out">{{ topologyScript }}</pre><button class="copy-btn" @click="copyText(topologyScript)">📋 复制</button></div>
+          <button class="btn primary" :disabled="!topoPrompt || topoLoading" @click="genTopology">
+            <span v-if="topoLoading" class="spin"></span>{{ topoLoading ? "正在生成…" : "生成绘图脚本" }}
+          </button>
+          <div v-if="topoLoading" class="out-wrap"><div class="hr-body hr-loading-body">正在调用大模型生成 {{ topoKind }} 脚本，请稍候（约 10~20 秒）…</div></div>
+          <div v-else-if="topologyScript" class="out-wrap"><pre class="out">{{ topologyScript }}</pre><button class="copy-btn" @click="copyText(topologyScript)">📋 复制</button></div>
         </div>
 
         <div v-if="writeTab==='viz'" class="sub">
@@ -624,7 +627,7 @@ export default {
         { key: "viz", name: "CSV可视化", ico: "📊" },
         { key: "trans", name: "学术翻译", ico: "🌐" }
       ],
-      idea: "", framework: "", frameworkLoading: false, topoKind: "mermaid", topoPrompt: "", topologyScript: "",
+      idea: "", framework: "", frameworkLoading: false, topoKind: "mermaid", topoPrompt: "", topologyScript: "", topoLoading: false,
       vizKind: "line", vizResult: {}, vizError: "",
       transText: "", translated: "",
       toolToView: { rag_qa: "qa", dedup: "library", read_translate: "read", arxiv_search: "search", graph_review: "graph", writing_copilot: "write" }
@@ -884,9 +887,18 @@ export default {
       this.frameworkLoading = false;
     },
     async genTopology() {
-      const fd = new FormData(); fd.append("kind", this.topoKind); fd.append("prompt", this.topoPrompt);
-      const r = await this.api("/writing/topology", { method: "POST", body: fd });
-      this.topologyScript = r.script || r.msg;
+      if (this.topoLoading) return;
+      this.topoLoading = true;
+      this.topologyScript = ""; // 先清掉上一轮结果，避免旧脚本留在屏幕上被误认为是新的
+      try {
+        const fd = new FormData(); fd.append("kind", this.topoKind); fd.append("prompt", this.topoPrompt);
+        const r = await this.api("/writing/topology", { method: "POST", body: fd });
+        this.topologyScript = r.script || r.msg || "生成失败：后端没有返回脚本内容";
+      } catch (e) {
+        this.topologyScript = "生成失败：" + (e && e.message ? e.message : e);
+      } finally {
+        this.topoLoading = false;
+      }
     },
     async uploadViz(e) {
       const f = e.target.files[0]; if (!f) return;
@@ -1318,7 +1330,7 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .dual { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .col { background: #fafbff; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
 .col-label { background: linear-gradient(120deg,#eef1fb,#efeafb); padding: 8px 12px; font-size: 12px; color: var(--c1); font-weight: 600; letter-spacing: 1px; }
-.col-body { padding: 18px 26px; font-size: 13px; line-height: 2; white-space: pre-wrap; max-height: 60vh; overflow: auto; }
+.col-body { padding: 18px 26px; font-size: 13px; line-height: 2; white-space: pre-wrap; max-height: 60vh; overflow: auto; text-align: left; }
 .paper-text { font-family: Georgia, "Times New Roman", "Songti SC", "SimSun", serif; color: #2b2b3a; }
 /* 论文正文排版：首行空两格 / 段前 1.4 倍行距 / 段内 1 倍行距 / 左对齐 */
 .paper-text p { margin: 0; text-indent: 2em; line-height: 1.2; text-align: left; word-break: break-word; }
@@ -1349,7 +1361,10 @@ body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: va
 .txt { padding: 12px; border: 1px solid #ccd3e6; border-radius: 10px; font-size: 14px; font-family: inherit; }
 .txt:focus { outline: none; border-color: var(--c1); }
 .txt.big { min-height: 90px; }
-.out { background: #f6f8ff; padding: 16px; border-radius: 10px; white-space: pre-wrap; font-size: 13px; line-height: 1.7; position: relative; }
+/* #app 全局 text-align:center 会让代码块/正文一起居中，这里显式左对齐并按代码等宽字体排版 */
+.out { background: #f6f8ff; padding: 16px; border-radius: 10px; white-space: pre-wrap; text-align: left; font-family: "Cascadia Code", "Consolas", "Courier New", monospace; font-size: 13px; line-height: 1.7; position: relative; }
+.spin { display: inline-block; width: 12px; height: 12px; margin-right: 7px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .out-wrap { position: relative; display: flex; flex-direction: column; gap: 8px; }
 .out-wrap .copy-btn { align-self: flex-end; }
 .sel { padding: 8px 12px; border-radius: 9px; border: 1px solid #ccd3e6; font-size: 14px; }
