@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -34,6 +34,10 @@ BASE_DIR = Path(__file__).resolve().parent
 PAPERS_DIR = BASE_DIR / "papers"
 PAPERS_DIR.mkdir(exist_ok=True)
 META_PATH = PAPERS_DIR / "meta.json"
+SESSIONS_PATH = PAPERS_DIR / "sessions.json"   # Agent 会话落盘，重启不丢
+
+# 评审模式令牌：只保护 /reviewer/* 端点，普通功能不受影响。
+REVIEWER_TOKEN = os.getenv("REVIEWER_TOKEN", "").strip()
 
 # ---------------- 全局状态 ----------------
 vs = VectorStore(dense_weight=0.6)
@@ -47,18 +51,60 @@ SESSIONS = {}      # session_id -> [messages]  Agent 会话记忆
 @asynccontextmanager
 async def lifespan(_app):
     load_state()   # 只读盘，毫秒级
+    _load_sessions()
     threading.Thread(target=_restore_vectors, daemon=True).start()   # 向量库后台重建
     yield
 
 
+# CORS：Starlette 不允许 allow_origins=["*"] 与 allow_credentials=True 同时生效（浏览器会丢弃凭证），
+# 所以默认给显式白名单；对外演示需要放开时设 ALLOW_ORIGINS=*，此时自动关闭 credentials。
+_allowed = [o.strip() for o in os.getenv("ALLOW_ORIGINS", "").split(",") if o.strip()]
+if not _allowed:
+    _allowed = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
 app = FastAPI(title="科研助手 Agent 系统", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_allowed,
+    allow_credentials="*" not in _allowed,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def require_reviewer(token: str = Query("", description="评审访问令牌（环境变量 REVIEWER_TOKEN）")):
+    """评审模式鉴权：不配置 REVIEWER_TOKEN 时端点不可用，普通功能完全不受影响。"""
+    if not REVIEWER_TOKEN:
+        raise HTTPException(status_code=503, detail="服务端未配置 REVIEWER_TOKEN，评审模式未启用")
+    if token != REVIEWER_TOKEN:
+        raise HTTPException(status_code=403, detail="token 无效")
+
+
+# ---------------- Agent 会话持久化 ----------------
+_SESSIONS_LOCK = threading.Lock()
+
+
+def _load_sessions():
+    """启动时恢复 Agent 会话记忆（坏文件不影响启动）。"""
+    if not SESSIONS_PATH.exists():
+        return
+    try:
+        data = json.loads(SESSIONS_PATH.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            SESSIONS.update(data)
+    except Exception as e:
+        print("[会话] 读取失败（忽略）：", e)
+
+
+def _save_sessions():
+    """把会话记忆写盘；每个 session 只留最近 8 条，避免文件无限增长。"""
+    with _SESSIONS_LOCK:
+        try:
+            slim = {k: v[-8:] for k, v in SESSIONS.items() if v}
+            SESSIONS_PATH.write_text(
+                json.dumps(slim, ensure_ascii=False, indent=0), encoding="utf-8")
+        except Exception as e:
+            print("[会话] 保存失败（忽略）：", e)
 
 
 # ---------------- 持久化 ----------------
@@ -661,8 +707,13 @@ def agent_tools():
     return {"ok": True, "tools": agent.describe_tools()}
 
 
+def _title_key(title):
+    """标题归一化：去掉标点/空格/大小写差异，用于判定「同一论文的不同版本」。"""
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", (title or "").lower())
+
+
 def _find_duplicates():
-    """真去重：扫描文献库内互相高度相似的论文对。"""
+    """真去重：标题相同视为同源版本（如 v1/v7）；否则要求内容高度相似（≥0.9）。"""
     dups = []
     meta = list(papers_meta.values())
     seen = set()
@@ -672,8 +723,15 @@ def _find_duplicates():
             key = (p["id"], h["paper_id"]) if p["id"] < h["paper_id"] else (h["paper_id"], p["id"])
             if h["paper_id"] == p["id"] or key in seen:
                 continue
-            if h["score"] >= 0.9:
-                dups.append({"a": p["title"], "b": h["title"], "score": h["score"]})
+            t1, t2 = _title_key(p["title"]), _title_key(h["title"])
+            if t1 and t1 == t2:
+                # 标题相同：内容分往往不够高（不同版本措辞有差异），按同源版本直接提示
+                dups.append({"a": p["title"], "b": h["title"], "score": round(max(h["score"], 0.95), 4),
+                             "reason": "标题相同：可能是同一论文的不同版本"})
+                seen.add(key)
+            elif h["score"] >= 0.9:
+                dups.append({"a": p["title"], "b": h["title"], "score": round(h["score"], 4),
+                             "reason": "内容高度相似"})
                 seen.add(key)
     return dups
 
@@ -724,7 +782,32 @@ def agent_chat(body: AgentBody):
     SESSIONS.setdefault(body.session_id, []).append({"role": "user", "content": body.query})
     if result.get("answer"):
         SESSIONS[body.session_id].append({"role": "assistant", "content": result["answer"]})
+    _save_sessions()
     return {"ok": True, "plan": plan, "steps": steps, "result": result}
+
+
+@app.post("/agent/chat/stream")
+async def agent_chat_stream(body: AgentBody):
+    """SSE 版 Agent：ReAct 每一步边执行边推送，前端可逐步渲染推理轨迹。"""
+    hist = list(SESSIONS.get(body.session_id, []))
+
+    def gen():
+        steps, result = [], {}
+        for ev, data in agent.run_plan_events(body.query, history=hist, run_tool=_run_tool):
+            if ev == "step":
+                steps.append(data)
+                yield "data: " + json.dumps({"step": data}, ensure_ascii=False) + "\n\n"
+            else:
+                result = data
+        SESSIONS.setdefault(body.session_id, []).append({"role": "user", "content": body.query})
+        if result.get("answer"):
+            SESSIONS[body.session_id].append({"role": "assistant", "content": result["answer"]})
+        _save_sessions()
+        yield "data: " + json.dumps({"done": True, "steps": steps, "result": result},
+                                    ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 class RoadmapBody(BaseModel):
@@ -755,7 +838,73 @@ def research_roadmap(body: RoadmapBody):
         return {"ok": False, "msg": str(e)}
 
 
+# ---------------- 评审模式（REVIEWER_TOKEN） ----------------
+# 只读、不改数据，用来向评委展示「检索打分 / RRF 配置 / 引用判定明细 / 图谱边来源」。
+
+@app.get("/reviewer/info")
+def reviewer_info(_ok: None = Depends(require_reviewer)):
+    return {
+        "ok": True,
+        "papers": len(papers_meta),
+        "chunks": len(vs._flat),
+        "dense_enabled": vs._dense is not None,
+        "rrf_k": vectorstore.RRF_K,
+        "dense_weight_only_for_score": vs.dense_weight,
+        "verify_policy": {
+            "citation_whitelist": "答案中的 [n] 必须落在本次检索片段的 1..N 内，越界判 fail",
+            "number_audit": "逐句把数值与所引片段的数值集合比对；全库无出处判 fail，仅在别的片段出现判 warn",
+            "levels": ["pass", "warn", "fail"],
+        },
+        "library": [
+            {"id": pid, "title": p["title"], "chunks": len(p["chunks"])}
+            for pid, p in vs.papers.items()
+        ],
+    }
+
+
+@app.get("/reviewer/search")
+def reviewer_search(query: str = Query(..., description="检索语句"),
+                    top_k: int = 6, _ok: None = Depends(require_reviewer)):
+    """展示检索明细：每条命中的论文、页码、混合分与片段，用于核对 RRF 召回序。"""
+    hits = vs.search(query, top_k=top_k)
+    return {
+        "ok": True, "query": query, "rrf_k": vectorstore.RRF_K,
+        "dense_enabled": vs._dense is not None,
+        "hits": [{"title": h["title"], "page": h["page"], "score": round(h["score"], 4),
+                  "snippet": h["text"][:300]} for h in hits],
+    }
+
+
+@app.get("/reviewer/qa")
+def reviewer_qa(query: str = Query(..., description="问题"),
+                _ok: None = Depends(require_reviewer)):
+    """走完整问答链路并回传 verify 明细（含被拒答的原始答案），用于现场演示抗幻觉。"""
+    hits = _expand_retrieval(query, scope=None, top_k=6)
+    if not hits:
+        return {"ok": True, "hits": [], "verify": {"status": "pass", "reason": "未检索到片段"}}
+    prompt = GUARD_PROMPT + f"【原文片段】\n{verify.build_context(hits)}\n\n【问题】{query}"
+    raw = llm.chat([{"role": "user", "content": prompt}], temperature=0.2)
+    v = verify.verify_answer(raw, hits)
+    return {
+        "ok": True,
+        "raw_answer": raw,
+        "final_answer": verify.finalize_answer(raw, v),
+        "verify": v,
+        "hits": [{"title": h["title"], "page": h["page"], "score": round(h["score"], 4)}
+                 for h in hits],
+    }
+
+
+@app.get("/reviewer/graph")
+def reviewer_graph(_ok: None = Depends(require_reviewer)):
+    """图谱边来源：每条边的 type、两端论文与判定依据。"""
+    g = get_graph()
+    return {"ok": True, "n_nodes": len(g.get("nodes", [])), "stats": g.get("stats", {}),
+            "links": g.get("links", []), "nodes": g.get("nodes", [])}
+
+
 @app.get("/")
 def root():
     return {"app": "科研助手 Agent 系统", "status": "running", "papers": len(papers_meta),
+            "reviewer_mode": bool(REVIEWER_TOKEN),
             "cached": len(os.listdir(llm.CACHE_DIR)) if os.path.exists(llm.CACHE_DIR) else 0}

@@ -896,15 +896,44 @@ export default {
       const q = (this.agentInput || "").trim(); if (!q || this.agentBusy) return;
       this.agentMsgs.push({ role: "user", text: q });
       this.agentInput = ""; this.agentBusy = true; this.scrollChat();
+      // 先占一条 assistant 消息：ReAct 每完成一步就填进来，避免"点了没反应"
+      this.agentMsgs.push({ role: "assistant", text: "正在规划…", toolLabel: "", jump: "", steps: [], streaming: true });
+      const idx = this.agentMsgs.length - 1;
       try {
-        const r = await this.api("/agent/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: q, session_id: this.agentSession }) });
-        const tool = (r.plan && r.plan[0] && r.plan[0].tool) || "";
-        const res = r.result || {};
-        const text = res.answer || res.note || res.msg || (res.title ? "已定位相关论文，请前往对应模块查看。" : "已理解你的需求，请前往对应模块使用。");
-        const steps = (r.steps || []).map(s => ({ action: s.action, tool: s.tool }));
-        this.agentMsgs.push({ role: "assistant", text, toolLabel: this.toolLabel(tool), jump: this.toolToView[tool] || "", steps });
+        const res = await fetch("/api/agent/chat/stream", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: q, session_id: this.agentSession })
+        });
+        if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+        const reader = res.body.getReader(); const dec = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const chunks = buf.split("\n\n"); buf = chunks.pop();
+          for (const c of chunks) {
+            const line = c.trim(); if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim(); if (!payload || payload === "[DONE]") continue;
+            let obj; try { obj = JSON.parse(payload); } catch (e) { continue; }
+            if (obj.step) {
+              this.agentMsgs[idx].steps.push({ action: obj.step.action, tool: obj.step.tool });
+              this.scrollChat();
+            }
+            if (obj.done) {
+              const r = obj.result || {};
+              const tool = ((obj.steps || [])[0] || {}).tool || "";
+              const m = this.agentMsgs[idx];
+              m.text = r.answer || r.note || r.msg || "已理解你的需求，请前往对应模块使用。";
+              m.toolLabel = this.toolLabel(tool); m.jump = this.toolToView[tool] || "";
+              m.streaming = false;
+            }
+          }
+        }
+        if (this.agentMsgs[idx].streaming) this.agentMsgs[idx].streaming = false;
       } catch (e) {
-        this.agentMsgs.push({ role: "assistant", text: "服务暂不可用：" + e });
+        this.agentMsgs[idx].streaming = false;
+        this.agentMsgs[idx].text = "服务暂不可用：" + e;
       }
       this.agentBusy = false; this.scrollChat();
     },

@@ -87,20 +87,30 @@ def _summarize(out):
     return json.dumps(safe, ensure_ascii=False)[:1500]
 
 
-def run_plan(query, history=None, run_tool=None):
-    """
-    核心编排：Function Calling 多步执行。
-    - query: 用户请求
-    - history: 该会话的最近消息列表（供上下文/记忆）
-    - run_tool: callable(tool_name, query) -> dict，执行单个工具
-    返回 (steps, result)：steps 为已执行步骤，result 为最终人话回答。
-    失败或无法调用工具时回退到关键词多步计划(plan_agent)。
+MAX_ROUNDS = 3   # ReAct 最多循环轮数，防止工具之间互相触发造成无限调用
+
+
+def _plan_of(steps):
+    return [{"step": f"步骤{i + 1}", "tool": s["tool"], "action": s["action"]}
+            for i, s in enumerate(steps)]
+
+
+def run_plan_events(query, history=None, run_tool=None):
+    """ReAct 编排：act(调工具) → observe(回填工具结果) → reason(下一轮决策)，逐轮循环。
+
+    每轮都把上一轮的工具结果交给模型，由它自己决定「继续调工具」还是「直接作答」；
+    最多 MAX_ROUNDS 轮，用尽后强制收敛成一次不带 tools 的回答。
+    生成器产出 ("step", {...}) 与 ("final", result)，供 /agent/chat（收集）
+    和 /agent/chat/stream（SSE 逐步推送）共用同一套逻辑。
     """
     system = (
         "你是「科研助手 Agent」，帮助用户完成论文解析、知识问答、引用图谱、综述与写作辅助等科研任务。"
-        "你可以直接调用下面这些工具完成任务。调用工具后，根据工具返回的结果，"
-        "给用户一个简洁、有帮助的中文最终回答，并说明应该去哪个模块查看或操作。"
-        "如果某工具提示需要先上传论文，请如实转达。不要编造工具没有返回的信息。"
+        "你可以直接调用下面这些工具完成任务。调用工具后，先判断工具结果是否已经足够回答用户；"
+        "如果还需要别的工具或还需要补充查询，可以继续调用；如果已经足够，就直接给出最终中文回答，"
+        "并说明应该去哪个模块查看或操作。若某工具提示需要先上传论文，请如实转达。不要编造工具没有返回的信息。"
+        "\n\n【硬性规则】只要用户的问题涉及已入库论文的具体内容、实验数据、结论或需要引用原文，"
+        "必须先调用 rag_qa 检索，拿到片段后才组织回答；不得凭模型自身记忆直接作答。"
+        "涉及重复/版本判断先调 dedup，涉及引用关系/综述先调 graph_review。"
     )
     messages = [{"role": "system", "content": system}]
     if history:
@@ -109,10 +119,15 @@ def run_plan(query, history=None, run_tool=None):
 
     steps = []
     try:
-        msg = llm.chat_message(messages, tools=_tools_schema(), temperature=0.2)
-        calls = msg.get("tool_calls") or []
-        if calls:
-            # 把首次 assistant 回复（含 tool_calls）回填，随后追加各 tool 结果
+        for rnd in range(1, MAX_ROUNDS + 1):
+            msg = llm.chat_message(messages, tools=_tools_schema(), temperature=0.2)
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                # 模型判断无需（或无需再）调用工具：本句即最终回答
+                answer = (msg.get("content") or "").strip() or "已理解你的需求。"
+                yield "final", {"answer": answer, "plan": _plan_of(steps)}
+                return
+
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
             for i, c in enumerate(calls):
                 fn = c.get("function") or {}
@@ -127,28 +142,36 @@ def run_plan(query, history=None, run_tool=None):
                     out = run_tool(name, q) if run_tool else {"note": "工具未绑定"}
                 except Exception as e:
                     out = {"msg": str(e)}
-                steps.append({"tool": name, "action": action, "result": out})
+                step = {"tool": name, "action": action, "round": rnd}
+                steps.append(step)
+                yield "step", step
                 messages.append({
                     "role": "tool",
                     "tool_call_id": c.get("id", f"call_{i}"),
                     "content": _summarize(out),
                 })
-            # 总结轮：让模型基于工具结果产出最终人话回答
-            final = llm.chat_message(messages, temperature=0.2)
-            plan = [{"step": f"步骤{i + 1}", "tool": s["tool"], "action": s["action"]}
-                    for i, s in enumerate(steps)]
-            result = {
-                "answer": (final.get("content") or "已完成相关操作，请前往对应模块查看。").strip(),
-                "plan": plan,
-            }
-        else:
-            result = {"answer": (msg.get("content") or "已理解你的需求。").strip(), "plan": []}
-        return steps, result
+
+        # 轮数用尽：不再给 tools，强制模型基于已有工具结果收敛成回答
+        final = llm.chat_message(messages, temperature=0.2)
+        yield "final", {"answer": (final.get("content") or "已完成相关操作，请前往对应模块查看。").strip(),
+                        "plan": _plan_of(steps)}
     except Exception as e:
-        # 兜底：关键词多步计划
-        steps = plan_agent(query)
-        result = {"plan": steps, "answer": ""}
-        return steps, result
+        # 兜底：关键词多步计划（保证离线/接口异常时仍有可展示的步骤）
+        plan = plan_agent(query)
+        yield "final", {"plan": plan, "answer": "", "error": str(e)}
+
+
+def run_plan(query, history=None, run_tool=None):
+    """同步版本：把 run_plan_events 收集成 (steps, result)。"""
+    steps, result = [], {}
+    for ev, data in run_plan_events(query, history, run_tool):
+        if ev == "step":
+            steps.append(data)
+        else:
+            result = data
+    if not steps and result.get("plan"):
+        steps = result["plan"]   # 兜底路径的步骤
+    return steps, result
 
 
 def route_intent(query):

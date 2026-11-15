@@ -25,7 +25,7 @@ llm_competition/
 │   ├── agent.py           # Agent 编排：工具注册表 + 意图路由 + 多步计划
 │   ├── requirements.txt
 │   ├── verify.py          # 抗幻觉程序判定（引用白名单 + 逐句数值回查 + 拒答）
-│   ├── tests/             # pytest：去重 / 检索RRF / 图谱 / 引用校验（22 例）
+│   ├── tests/             # pytest：去重 / 检索RRF / 图谱 / 引用校验（24 例）
 │   ├── .env               # 配置 DASHSCOPE_API_KEY（必需，从 .env.example 复制）
 │   └── papers/            # 论文落盘目录（parse.json + meta.json 持久化）
 └── frontend/
@@ -130,22 +130,49 @@ npm run dev
 - `UnderstandingDeepLearning_02_09_26_C.pdf` —— 541 页长教材（分块/索引/异步进度）
 
 ## 验证要点（对应评审）
-- **Agent/工作流（35%）**：`/agent/chat` 多步编排、六大工具注册表、前端步骤条
-- **抗幻觉 RAG**：混合检索 + 每个回答带 `[来源 论文名 第X页]` 锚点 + 置信度
-- **多模态解析**：扫描件自动 OCR、标题树、公式、表格、参考文献，长文档异步解析
-- **工程可复现**：模块化解耦、requirements.txt、磁盘持久化、结果缓存、本地 ECharts
+- **Agent/工作流（35%）**：`/agent/chat` 与 `/agent/chat/stream` —— 多轮 ReAct 循环（最多 3 轮，工具结果回喂模型决定下一步）、六大工具注册表、SSE 逐步推送推理轨迹、会话记忆落盘
+- **抗幻觉 RAG**：混合检索（RRF 融合定序）+ 回答带 `[1][2]` 引用编号 + **程序判定层**（引用越界判 fail、数值无出处判 fail、误引判 warn）+ 置信度分级
+- **多模态解析**：扫描件自动 OCR、标题树、公式（数学字体启发式）、表格、参考文献，长文档异步解析
+- **工程可复现**：模块化解耦、requirements.txt、磁盘持久化、结果缓存、本地 ECharts、24 条 pytest
 ## 运行测试与打包
 
 ```cmd
 cd backend
 .venv\Scripts\python.exe -m pytest tests -q
 ```
-预期 `22 passed`，覆盖语义去重、RRF 检索、引用图谱、抗幻觉引用校验四块。
+预期 `24 passed`，覆盖语义去重、RRF 检索、引用图谱、抗幻觉引用校验四块。
 
 打提交包（自动排除 `.env`、`.venv`、`node_modules`、`.cache`、`chroma_db`、`papers`、`dist`、`*_old*`、`ngrok.exe`；打包后会回读 ZIP 做泄漏检查，命中敏感文件即报错并删除产物）：
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\pack.ps1
 ```
+
+## 评审模式（带账号的常驻演示）
+
+设置环境变量 `REVIEWER_TOKEN` 后，服务额外开放四个**只读**端点，供评委现场核对内部决策，
+普通功能（上传/解析/问答/图谱等）保持原样、不需要 token。
+
+```powershell
+# 1. 生成一个令牌（示例，可自行替换）
+python -c "import secrets;print(secrets.token_urlsafe(16))"
+
+# 2. 写进 backend\.env
+REVIEWER_TOKEN=<上一步生成的串>
+
+# 3. 正常启动，然后用浏览器/curl 带 token 访问
+curl "http://127.0.0.1:8000/reviewer/info?token=<TOKEN>"
+```
+
+| 端点 | 用途 |
+|---|---|
+| `GET /reviewer/info?token=` | 语料规模、`dense` 是否实际启用、`RRF_K` 取值、引用判定策略、篇目清单 |
+| `GET /reviewer/search?token=&query=&top_k=` | 检索明细：每条命中的论文/页码/混合分/片段，用于核对召回 |
+| `GET /reviewer/qa?token=&query=` | 走完整问答链路并回传 `verify` 明细与被拒答的原始答案，用于演示抗幻觉 |
+| `GET /reviewer/graph?token=` | 引用图谱每条边的 `type`（`cites` / `version`）与统计 |
+
+未配置 `REVIEWER_TOKEN` 时上述端点返回 503（"评审模式未启用"），不泄露任何内部信息。
+对外演示（隧道/公网）时把 `ALLOW_ORIGINS` 设为 `*`，服务会自动关闭 `allow_credentials`，
+避免 `allow_origins=["*"]` 与凭证共用这个浏览器禁止的非法组合。
 
 ## 团队信息
 
