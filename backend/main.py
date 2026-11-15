@@ -17,7 +17,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 import llm
@@ -612,6 +612,30 @@ def search_arxiv(q: str, max_results: int = 8):
         return {"ok": True, "items": arxiv_engine.recommend(items, local_titles)}
     except Exception as e:
         return {"ok": False, "msg": str(e)}
+
+
+@app.get("/arxiv/pdf")
+def arxiv_pdf(id: str = Query(..., description="arXiv 编号，如 2201.00978v1")):
+    """代理下载 arXiv PDF：浏览器只访问本机后端，由后端去取（https 优先，镜像回退）。
+
+    原先前端直接指向 arxiv.org 的链接，在国内网络下裸跳会 ERR_CONNECTION_TIMED_OUT。
+    """
+    # 只放行标准编号形态，避免把这里当成任意 URL 代理
+    if not re.match(r"^[0-9]{4}\.[0-9]{4,5}(v\d+)?$", id):
+        raise HTTPException(status_code=400, detail="非法的 arXiv 编号")
+    try:
+        data, base = arxiv_engine.fetch_pdf(id)
+    except Exception as e:
+        raise HTTPException(status_code=504, detail=f"arXiv 下载失败（{e}），请稍后重试")
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{id}.pdf"',
+            "Cache-Control": "public, max-age=3600",
+            "X-Arxiv-Source": base,
+        },
+    )
 
 
 # ---------------- 模块五：引用图谱 + 综述 ----------------

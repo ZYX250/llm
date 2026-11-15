@@ -401,7 +401,7 @@
             <p class="abs">{{ (it.abstract||'').slice(0,220) }}…</p>
             <div class="row">
               <span class="badge" :class="it.reproducible ? 'ocr' : ''">{{ it.reproducible ? "🔧 附开源代码·易复现" : "无代码" }}</span>
-              <a :href="it.pdf" target="_blank" class="btn small">PDF</a>
+              <a :href="pdfHref(it)" target="_blank" class="btn small">PDF</a>
               <a :href="it.url" target="_blank" class="btn small">详情</a>
             </div>
             <div class="reason">推荐理由：{{ it.reason }}</div>
@@ -841,6 +841,13 @@ export default {
       } finally {
         this.searchLoading = false;
       }
+    },
+    // arXiv 的 PDF 不直连浏览器（国内裸跳 arxiv.org 会超时），统一走后端代理。
+    // 从 abs 链接里取出编号（如 2201.00978v1）；取不到时退回后端给的原始链接。
+    pdfHref(it) {
+      const m = String((it && it.url) || "").match(/\/abs\/([^/?#]+)/);
+      const id = m ? m[1] : "";
+      return id ? "/api/arxiv/pdf?id=" + encodeURIComponent(id) : (it.pdf || "");
     },
     async loadGraph() { const r = await this.api("/graph"); this.graph = r; this.$nextTick(() => this.renderGraph()); },
     renderGraph() {

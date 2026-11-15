@@ -73,8 +73,10 @@ def search(query, max_results=10):
             "title": title,
             "authors": authors[:8],
             "abstract": summary,
-            "url": link,
-            "pdf": link.replace("/abs/", "/pdf/") + ".pdf",
+            "url": link.replace("http://", "https://"),
+            # atom:id 返回的是 http:// 明文地址，浏览器直连 80 端口访问境外站点会超时
+            # （实测 ERR_CONNECTION_TIMED_OUT）；统一升到 https，https 实测可正常打开。
+            "pdf": link.replace("/abs/", "/pdf/").replace("http://", "https://") + ".pdf",
             "published": pub,
             "github": github.group(1) if github else None,
             "reproducible": bool(github),
@@ -99,3 +101,27 @@ def recommend(items, local_titles):
             reason += "；附带开源代码，易复现"
         out.append({**it, "reason": reason})
     return out
+
+
+# PDF 下载走两个域名：主站实测 1~2 秒，镜像站作为回退（部分网络下主站会挂起）。
+PDF_BASES = ("https://arxiv.org/pdf/", "https://export.arxiv.org/pdf/")
+
+
+def fetch_pdf(arxiv_id, timeout=(8, 25)):
+    """按 arXiv 编号下载 PDF 字节流，返回 (content, 命中的域名)。
+
+    交给后端代理而不是让浏览器直连：浏览器一旦落到裸 http 或海外冷连接就会超时，
+    后端可以限制超时、换镜像、把失败原因带回前端。
+    """
+    errs = []
+    for base in PDF_BASES:
+        try:
+            r = requests.get(base + arxiv_id + ".pdf", headers=HEADERS,
+                             timeout=timeout, stream=True)
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            if r.status_code == 200 and "pdf" in ctype:
+                return r.content, base
+            errs.append(f"{base} HTTP {r.status_code}")
+        except Exception as e:
+            errs.append(f"{base} {type(e).__name__}")
+    raise RuntimeError("；".join(errs) or "未知错误")
