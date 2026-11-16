@@ -26,7 +26,10 @@ $excludeDirNames = @(
 )
 
 # 文件级排除（-like 通配）
-$excludeFilePatterns = @(".env", "*.old", "*.pyc", "*.log", "ngrok.exe", "*.zip")
+# 技术文档（docx/pdf）走大赛官网单独提交，不进代码包：否则包体里多出一份
+# 与仓库不同步的文档副本，评委也分不清哪份是准的。
+$excludeFilePatterns = @(".env", "*.old", "*.pyc", "*.log", "ngrok.exe", "*.zip",
+                         "科研助手Agent应用系统*技术文档*")
 
 # 额外的单个文件（默认不进包）
 $alwaysExcludeFileNames = @("reviewer_access.txt", "ngrok_launch.bat")   # 含真实令牌 / 与提交无关
