@@ -3,7 +3,8 @@
 .SYNOPSIS
     传智杯「科研助手 Agent 系统 v2.0」一键部署演示脚本（含公网隧道）
 .DESCRIPTION
-    一条命令把项目拉起为"评委可公网访问的常驻演示"，满足比赛 2.4 在线演示要求：
+    一条命令把项目拉起为评委可直接访问的演示环境：默认局域网，加 -Public 走公网隧道。
+    在线演示属可选路线（本项目默认以演示视频交付），需要时用本脚本即可临时开一个入口：
       1) 端口预检（避免旧进程占用导致启动失败）
       2) 注入 REVIEWER_TOKEN（评审鉴权令牌，自动生成或外部传入）
       3) 后台启动后端(uvicorn:8000) + 前端(vite:5173，自带 /api 代理到后端)
@@ -218,7 +219,7 @@ $reviewerAPI = "http://<演示地址>:$FrontendPort/api/reviewer/qa?token=$Revie
 if ($publicURL) { $reviewerAPI = "$publicURL/api/reviewer/qa?token=$ReviewerToken" }
 
 $demoFlow = @"
-  推荐演示流程（评委第 6 条「带评审账号的常驻演示」）：
+  推荐演示流程（对应评委第 6 条「带评审账号的在线演示」；录视频时同样按此顺序）：
     1) 上传《Attention Is All You Need》v1 与 v7 两个版本
        → 触发「检测到同源/重复版本」去重提示
     2) 上传一篇引用它的论文（如引用 1706.03762 的后续工作）
@@ -238,7 +239,7 @@ $card = @"
   前端（评委用，所有 API 经 /api 同源代理）：
     本机    : $localURL
     局域网  : $lanURL
-$(if ($publicURL) { "    公网    : $publicURL   <- 提交给评委的演示地址" } else { "    公网    : 未启用（加 -Public 可建立公网隧道）" })
+$(if ($publicURL) { "    公网    : $publicURL   <- 需要在线演示时才给评委的临时地址（关机/断网即失效）" } else { "    公网    : 未启用（加 -Public 可建立公网隧道）" })
 
   评审账号（只读模式令牌）：
     REVIEWER_TOKEN = $ReviewerToken
