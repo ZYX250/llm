@@ -8,6 +8,7 @@ vectorstore.py — 轻量向量库 + 混合检索(RAG)
 import math
 import os
 import re
+import threading
 from collections import Counter
 import numpy as np
 import llm
@@ -53,6 +54,11 @@ class VectorStore:
         self._vocab = set()
         self._dense_map = {}     # pid -> 该篇全部 chunk 的向量（行序与 chunks 一致）
         self._vec_failed = set() # 本进程内算不出来的论文，避免每次 rebuild 反复等接口超时
+        # 批量上传会为每个 PDF 起一个后台解析线程，两个线程同时进 _rebuild 时，
+        # 一边往 papers 里插入、一边 for ... in papers.items() 遍历，Python 抛
+        # RuntimeError: dictionary changed size during iteration（实测 v1 版解析到 99% 才失败）。
+        # 用 RLock 而不是 Lock：add_paper 里已经持锁，_rebuild 若再取一次同类型的锁会自锁死。
+        self._lock = threading.RLock()
 
     # ---------- 管理 ----------
     def add_paper(self, paper_id, title, chunks):
@@ -62,15 +68,17 @@ class VectorStore:
         的代价约等于本篇 chunk 数的一次 embedding 批量调用，不会因为库里
         已有 N 篇而变成 N 倍开销——这是把向量按篇落盘换来的。
         """
-        self.papers[paper_id] = {"title": title, "chunks": chunks}
-        self._rebuild()
+        with self._lock:
+            self.papers[paper_id] = {"title": title, "chunks": chunks}
+            self._rebuild()
 
     def add_papers_bulk(self, items):
         """批量恢复（启动时用）：只重建一次索引。
         逐篇 add_paper 会让每次 _rebuild 都重算全库 embedding，n 篇就是 O(n²) 次调用。"""
-        for paper_id, title, chunks in items:
-            self.papers[paper_id] = {"title": title, "chunks": chunks}
-        self._rebuild()
+        with self._lock:
+            for paper_id, title, chunks in items:
+                self.papers[paper_id] = {"title": title, "chunks": chunks}
+            self._rebuild()
 
     def remove_paper(self, paper_id):
         """删除一篇论文：丢弃本篇向量并重建索引。
@@ -79,11 +87,12 @@ class VectorStore:
         是毫秒级操作，不会触发全库重新 embedding；这也是"删论文不用重算"
         这个体验的前提。
         """
-        self.papers.pop(paper_id, None)
-        # 该篇向量直接丢弃，其余篇的向量仍在内存里，rebuild 只做拼接（毫秒级）
-        self._dense_map.pop(paper_id, None)
-        self._vec_failed.discard(paper_id)
-        self._rebuild()
+        with self._lock:
+            self.papers.pop(paper_id, None)
+            # 该篇向量直接丢弃，其余篇的向量仍在内存里，rebuild 只做拼接（毫秒级）
+            self._dense_map.pop(paper_id, None)
+            self._vec_failed.discard(paper_id)
+            self._rebuild()
 
     def clear(self):
         """清空全库，连向量缓存一起丢弃。
@@ -91,14 +100,16 @@ class VectorStore:
         与 remove_paper 不同：这里连 _dense_map 都清掉，所以下一次重建必须
         重新 embedding 全部论文，耗时随库大小线性上升。仅在调试/重置时调用。
         """
-        self.papers = {}
-        self._dense_map = {}
-        self._vec_failed = set()
-        self._rebuild()
+        with self._lock:
+            self.papers = {}
+            self._dense_map = {}
+            self._vec_failed = set()
+            self._rebuild()
 
     def list_papers(self):
-        return [{"id": pid, "title": p["title"], "n_chunks": len(p["chunks"])}
-                for pid, p in self.papers.items()]
+        with self._lock:
+            return [{"id": pid, "title": p["title"], "n_chunks": len(p["chunks"])}
+                    for pid, p in self.papers.items()]
 
     # ---------- 向量持久化 ----------
     def _vec_path(self, pid):
@@ -204,35 +215,46 @@ class VectorStore:
         q_terms = _tokenize(query)
         q_vec = Counter(q_terms)
 
-        idxs = range(len(self._flat))
+        # 快照后计算：_rebuild 是整体替换 _flat/_sparse/_idf/_dense（不是原地改），
+        # 先把引用抓到局部变量，重合上传时的 rebuild 就不会在检索中途换掉底层数组。
+        # 锁只覆盖取快照这一步，embedding 网络请求留在锁外，避免一次检索把上传线程堵住。
+        with self._lock:
+            flat = self._flat
+            sparse = self._sparse
+            idf = self._idf
+            dense = self._dense
+            titles = {pid: p["title"] for pid, p in self.papers.items()}
+            dense_weight = self.dense_weight
+
+        idxs = range(len(flat))
         if scope:
             scope = set(scope)
-            idxs = [i for i in idxs if self._flat[i][0] in scope]
+            idxs = [i for i in idxs if flat[i][0] in scope]
         idxs = list(idxs)
         if not idxs:
             return []
 
-        q_norm = math.sqrt(sum((self._idf.get(t, 0) * v) ** 2 for t, v in q_vec.items())) or 1
+        q_norm = math.sqrt(sum((idf.get(t, 0) * v) ** 2 for t, v in q_vec.items())) or 1
         sparse_scores = []
         for i in idxs:
-            cnt = self._sparse[i]
-            s = sum(self._idf.get(t, 0) * cnt[t] for t in q_vec)
-            d_norm = math.sqrt(sum((self._idf.get(t, 0) * v) ** 2 for t, v in cnt.items())) or 1
+            cnt = sparse[i]
+            s = sum(idf.get(t, 0) * cnt[t] for t in q_vec)
+            d_norm = math.sqrt(sum((idf.get(t, 0) * v) ** 2 for t, v in cnt.items())) or 1
             sparse_scores.append(s / (q_norm * d_norm))
 
-        scores = [s * (1 - self.dense_weight) for s in sparse_scores]
+        scores = [s * (1 - dense_weight) for s in sparse_scores]
 
         has_dense = False
-        if self._dense is not None:
+        if dense is not None:
             q_emb = llm.embed_text(query)
             if q_emb is not None:
                 q_emb = np.array(q_emb, dtype=np.float32)
                 qn = np.linalg.norm(q_emb) or 1
-                dmat = self._dense[idxs]
+                dmat = dense[idxs]
                 dn = np.linalg.norm(dmat, axis=1)
                 cos = (dmat @ q_emb) / (dn * qn + 1e-9)
                 for k in range(len(idxs)):
-                    scores[k] += float(cos[k]) * self.dense_weight
+                    scores[k] += float(cos[k]) * dense_weight
                 has_dense = True
 
         # RRF 融合：只用来确定召回顺序，score 仍保留 0~1 的混合分。
@@ -251,10 +273,10 @@ class VectorStore:
         ranked = sorted(zip(idxs, scores), key=lambda x: -rrf.get(x[0], 0.0))
         results = []
         for i, sc in ranked[:top_k]:
-            pid, ci, text, page = self._flat[i]
+            pid, ci, text, page = flat[i]
             results.append({
                 "paper_id": pid,
-                "title": self.papers[pid]["title"],
+                "title": titles.get(pid, ""),
                 "page": page,
                 "text": text,
                 "score": round(float(sc), 4),

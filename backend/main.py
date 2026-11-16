@@ -138,7 +138,9 @@ def _save_meta():
     但让一次保存失败把整个上传请求打挂，代价远大于丢掉一次元数据快照。"""
     try:
         with open(META_PATH, "w", encoding="utf-8") as f:
-            json.dump(papers_meta, f, ensure_ascii=False)
+            # 先做一层浅拷贝再序列化：批量上传时另一个解析线程可能正在往 papers_meta
+            # 里插入新论文，json.dump 遍历原字典会抛 "dictionary changed size during iteration"。
+            json.dump(dict(papers_meta), f, ensure_ascii=False)
     except Exception as e:
         print("meta 保存失败：", e)
 
@@ -965,7 +967,9 @@ def reviewer_info(_ok: None = Depends(require_reviewer)):
         },
         "library": [
             {"id": pid, "title": p["title"], "chunks": len(p["chunks"])}
-            for pid, p in vs.papers.items()
+            # list() 先把快照取出来：上传线程正在 insert 时直接遍历 items() 会抛
+            # "dictionary changed size during iteration"，评审面板没必要为此 500。
+            for pid, p in list(vs.papers.items())
         ],
     }
 
