@@ -26,10 +26,13 @@ $excludeDirNames = @(
 )
 
 # 文件级排除（-like 通配）
-# 技术文档（docx/pdf）走大赛官网单独提交，不进代码包：否则包体里多出一份
-# 与仓库不同步的文档副本，评委也分不清哪份是准的。
-$excludeFilePatterns = @(".env", "*.old", "*.pyc", "*.log", "ngrok.exe", "*.zip",
-                         "科研助手Agent应用系统*技术文档*")
+# 技术文档（docx/pdf）走大赛官网单独提交，不进代码包，规则见下面 ROOT_DOC_EXTS。
+# 这里只写 ASCII 字面量：脚本被 Windows PowerShell 5.1 以非 UTF-8 读取时，
+# 中文文件名匹配会变成乱码而静默失效（已踩过一次）。
+$excludeFilePatterns = @(".env", "*.old", "*.pyc", "*.log", "ngrok.exe", "*.zip")
+
+# 根目录的技术文档按扩展名排除：不依赖中文文件名，5.1/7.x 行为一致
+$ROOT_DOC_EXTS = @(".docx", ".doc", ".pdf")
 
 # 额外的单个文件（默认不进包）
 $alwaysExcludeFileNames = @("reviewer_access.txt", "ngrok_launch.bat")   # 含真实令牌 / 与提交无关
@@ -63,6 +66,11 @@ try {
             foreach ($pat in $excludeFilePatterns) {
                 if ($f.Name -like $pat) { $isExcludedFile = $true; break }
             }
+        }
+        # 根目录下的文档（技术文档/作品介绍等）一律不入包：它们走官网单独提交，
+        # 留在包里只会产生与仓库不同步的副本，评委也分不清哪份是准的
+        if (-not $isExcludedFile -and $segs.Count -eq 1 -and ($ROOT_DOC_EXTS -contains $f.Extension.ToLower())) {
+            $isExcludedFile = $true
         }
 
         if ($inExcludedDir -or $isExcludedFile) {
