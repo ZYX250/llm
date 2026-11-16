@@ -109,6 +109,10 @@ try {
             if ($name -eq ".env" -or $name -eq "ngrok.exe" -or $name -like "*.old") { $bad += $full }
             if ($name -eq "reviewer_access.txt" -or $name -like "*.log" -or $name -eq "ngrok_launch.bat" -or $name -eq "DEMO_VIDEO_SCRIPT.md") { $bad += $full }
             if ($full -match "(^|/)(\.venv|node_modules|\.git|\.cache|chroma_db)/") { $bad += $full }
+            # 根目录文档必须排除：作品介绍/技术文档走官网槽位，包内只保留 doc/ 子目录里的技术文档
+            if ($full -notmatch "/" -and $full -match "\.(pdf|docx|doc)$") { $bad += $full }
+            # 条目名出现制图符号区字符（U+2500–U+257F）说明是 GBK 乱码：5.1 的 Compress-Archive 干的
+            if ($full -match "[\u2500-\u257F]") { $bad += ("乱码条目名：" + $full) }
         }
         $entryCount = $zip.Entries.Count
         $zipSize = (Get-Item -LiteralPath $Output).Length
@@ -118,7 +122,7 @@ try {
 
     if ($bad.Count -gt 0) {
         Remove-Item -LiteralPath $Output -Force -ErrorAction SilentlyContinue
-        throw ("泄漏检查未通过，已删除产物。以下文件不应进包：`n" + ($bad -join "`n"))
+        throw ("泄漏检查未通过，已删除产物。以下文件不应进包：`n" + ($bad -join "`n") + "`n提示：请用 pwsh 7 运行本脚本（powershell.exe 5.1 写出的条目名会是 GBK 乱码）。")
     }
 
     Write-Host "打包完成"
