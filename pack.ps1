@@ -29,6 +29,7 @@ $excludeDirNames = @(
 $excludeFilePatterns = @(".env", "*.old", "*.pyc", "*.log", "ngrok.exe", "*.zip")
 
 # 额外的单个文件（默认不进包）
+$alwaysExcludeFileNames = @("reviewer_access.txt", "ngrok_launch.bat")   # 含真实令牌 / 与提交无关
 $excludeFileNames = @("修改建议_评委反馈.md")
 if ($IncludeNotes) { $excludeFileNames = @() }
 
@@ -54,7 +55,7 @@ try {
         }
 
         # 判断文件名是否命中排除名单
-        $isExcludedFile = ($excludeFileNames -contains $f.Name)
+        $isExcludedFile = ($excludeFileNames -contains $f.Name) -or ($alwaysExcludeFileNames -contains $f.Name)
         if (-not $isExcludedFile) {
             foreach ($pat in $excludeFilePatterns) {
                 if ($f.Name -like $pat) { $isExcludedFile = $true; break }
@@ -93,6 +94,7 @@ try {
             $name = ($e.FullName -split '/')[-1]
             $full = $e.FullName
             if ($name -eq ".env" -or $name -eq "ngrok.exe" -or $name -like "*.old") { $bad += $full }
+            if ($name -eq "reviewer_access.txt" -or $name -like "*.log" -or $name -eq "ngrok_launch.bat") { $bad += $full }
             if ($full -match "(^|/)(\.venv|node_modules|\.git|\.cache|chroma_db)/") { $bad += $full }
         }
         $entryCount = $zip.Entries.Count
@@ -111,7 +113,7 @@ try {
     Write-Host ("  大小    : " + [math]::Round($zipSize / 1KB, 1) + " KB")
     Write-Host ("  条目数  : " + $entryCount)
     Write-Host ("  已排除  : " + $skipped.Count + " 个文件（.env/.venv/node_modules/.cache/chroma_db/papers/dist/_old 等）")
-    Write-Host "  泄漏检查: 通过（不含 .env、.venv、node_modules、_old）"
+    Write-Host "  泄漏检查: 通过（不含 .env、reviewer_access.txt、.venv、node_modules、日志、_old）"
 }
 finally {
     if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
