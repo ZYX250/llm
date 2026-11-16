@@ -13,7 +13,7 @@
 llm_competition/
 ├── start.py             # 一键启动（后端+前端同时拉起，Ctrl+C 停止）
 ├── pack.ps1             # 打包提交 ZIP（排除 .env/.venv/node_modules/缓存/_old，含泄漏检查）
-├── deploy_server.sh     # 云服务器(Ubuntu)一键部署：nginx 反代 + systemd 自启（公网常驻演示）
+├── deploy_server.sh     # 云服务器(Ubuntu)一键部署：nginx 反代 + systemd 自启（可选在线演示）
 ├── deploy_demo.ps1      # 本地 Windows 一键演示（含 ngrok 隧道，适合现场答辩）
 ├── README.md
 ├── backend/
@@ -149,7 +149,7 @@ cd backend
 powershell -ExecutionPolicy Bypass -File .\pack.ps1
 ```
 
-## 评审模式（带账号的常驻演示）
+## 评审模式（只读评审账号）
 
 设置环境变量 `REVIEWER_TOKEN` 后，服务额外开放四个**只读**端点，供评委现场核对内部决策，
 普通功能（上传/解析/问答/图谱等）保持原样、不需要 token。
@@ -176,9 +176,9 @@ curl "http://127.0.0.1:8000/reviewer/info?token=<TOKEN>"
 对外演示（隧道/公网）时把 `ALLOW_ORIGINS` 设为 `*`，服务会自动关闭 `allow_credentials`，
 避免 `allow_origins=["*"]` 与凭证共用这个浏览器禁止的非法组合。
 
-## 部署到云服务器（公网常驻演示）
+## 部署到云服务器（可选 · 在线演示方案）
 
-满足"评审期间须保持服务可用"：把服务部署到一台常开的云服务器，由 systemd 托管（开机自启、崩溃自愈），nginx 反代 `/api`，评委只用固定公网地址即可访问，**无需你本地电脑开机**。
+本节为**可选部署方案**：本项目已选择以演示视频交付；若评审安排需要在线演示，可按下列步骤把服务部署到一台常开的云服务器（systemd 托管、开机自启、崩溃自愈，nginx 反代 `/api`），评委用固定公网地址即可访问，无需本地电脑开机。
 
 前置：Ubuntu 22.04 云服务器（2 核 2G 足够，LLM 走 DashScope 云端 API 无需 GPU）；云控制台安全组放行 22 与 80 入站。
 
