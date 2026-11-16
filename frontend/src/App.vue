@@ -601,6 +601,8 @@ export default {
       topoPresets: ["RAG检索增强生成流程图", "Transformer 编码器结构图", "多Agent协作架构图"],
       transPreset: "我们提出了一种基于注意力机制的新型神经网络架构，在多个机器翻译任务上取得了显著效果提升。",
 
+      // Agent 会话 id 在 mounted 里按时间戳现生成：刷新即新会话，
+      // 不把上一次演示留下的上下文与工具痕迹带进这一次演示。
       agentMsgs: [], agentInput: "", agentBusy: false, agentSession: "",
 
       petOpen: false, petBusy: false, petInput: "", petMsgs: [],
@@ -614,6 +616,8 @@ export default {
         { l: "帮我写综述", q: "基于已入库论文帮我写一段综述" }
       ],
 
+      // 文献相关状态集中一组：papers 是后端 meta 的镜像；uploadTasks 只记本次会话的
+      // 解析进度，不落盘——刷新后进度条消失是预期行为，服务端 TASKS 才是唯一事实来源。
       papers: [], dedupNotice: "", uploading: false, uploadTasks: [],
       parse: null, parseTab: "标题树", parseTabs: ["标题树", "公式", "表格", "参考文献"],
       qaQuery: "", qaAnswer: "", qaStreamText: "", qaSources: [], qaScope: [], qaLoading: false, qaConfidence: "", qaVerify: null,
@@ -702,6 +706,9 @@ export default {
       } catch(e) { this.homeResult = "调用失败："+e; }
       this.homeBusy = false;
     },
+    // 所有 JSON 接口的唯一出口：/api 前缀由 vite 代理改写，前端不写死后端地址。
+    // 先取 text 再 parse，是为了后端返回非 JSON（502 网关页、代理错误页）时
+    // 也能把原文交给调用方显示，而不是抛一个看不出原因的 SyntaxError。
     async api(url, opts = {}) {
       const res = await fetch("/api" + url, opts);
       const text = await res.text();
@@ -741,6 +748,8 @@ export default {
       await this.pollUploads();
       if (this.readPaper === id) { this.readPage = 1; await this.fetchRead(); await this.fetchPageSums(); this.readTranslated = ""; }
     },
+    // 轮询而不是让后端推送进度：上传是用户主动触发的短任务，700ms 的间隔对 1~2 分钟
+    // 的解析已经够用，而单独维持一条 SSE 会在切页、断网后留下没人关闭的连接。
     async pollUploads() {
       const pending = () => this.uploadTasks.some(t => t.status === "parsing");
       while (pending()) {
@@ -771,6 +780,8 @@ export default {
       const scope = this.qaScope.length ? this.qaScope : this.papers.map(p => p.id);
       const body = { query: this.qaQuery, paper_ids: scope, top_k: 6 };
       try {
+        // 手写 SSE 解析而不用 EventSource：问答要 POST 且带 JSON body，EventSource 只支持 GET。
+        // buf 保留最后一段未闭合内容，避免把被网络切断的半条 data: 当成完整帧解析。
         const resp = await fetch("/api/qa/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const reader = resp.body.getReader(); const dec = new TextDecoder(); let buf = "";
         while (true) {
@@ -790,6 +801,8 @@ export default {
           }
         }
       } catch {
+        // 流式失败退回同步 /qa：现场网络抖动时宁可慢几秒也要给出答案，
+        // 而不是在屏幕上留一条错误——演示中途断掉的流，比慢两秒难解释得多。
         const r = await this.api("/qa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         this.qaAnswer = r.answer || "出错"; this.qaSources = r.sources || []; this.qaConfidence = r.confidence || ""; this.qaVerify = r.verify || null;
       }
@@ -886,6 +899,8 @@ export default {
       } catch (e) { this.framework = "请求出错：" + e; }
       this.frameworkLoading = false;
     },
+    // 拓扑脚本是最慢的一路（一次长文本生成，实测十几秒）。loading 必须置在最前：
+    // 早先版本没有这个标志，用户点完看不到任何反馈，会以为按钮没响应而反复点击。
     async genTopology() {
       if (this.topoLoading) return;
       this.topoLoading = true;
@@ -900,6 +915,8 @@ export default {
         this.topoLoading = false;
       }
     },
+    // 图表结果整体替换而非追加：一份 CSV 只描述一组数据，
+    // 旧图留在屏幕上会被误读成「新旧两组数据的对比图」。
     async uploadViz(e) {
       const f = e.target.files[0]; if (!f) return;
       const fd = new FormData(); fd.append("file", f); fd.append("kind", this.vizKind);
@@ -949,6 +966,8 @@ export default {
             }
           }
         }
+        // 流结束时兜底关掉 streaming：服务端中途异常不会发 done 帧，
+        // 不在这里收尾，气泡会永远停在「正在规划…」，看起来像卡死。
         if (this.agentMsgs[idx].streaming) this.agentMsgs[idx].streaming = false;
       } catch (e) {
         this.agentMsgs[idx].streaming = false;
@@ -1078,6 +1097,9 @@ export default {
       return null;  // 其余交给后端大模型
     }
   },
+    // 只做三件事：开一个会话 id、把桌宠摆到右下角、启动时钟。
+    // 论文列表交给 loadPapers 单独拉、不阻塞挂载：此时后端可能正在后台重建向量库，
+    // 如果等它返回再挂载，首页会空白好几秒。
   mounted() {
     this.agentSession = "s" + Date.now().toString(36);
     this.petX = window.innerWidth - 96;

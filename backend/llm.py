@@ -33,6 +33,12 @@ def _cache_path(key):
 
 
 def _cache_get(key):
+    """读取磁盘缓存，用文件 mtime 判断过期。
+
+    过期时间不写进文件内容：缓存文件本身就是唯一事实来源，进程重启或系统时间
+    被调整都不需要额外字段去对齐。
+    任何异常一律当未命中——缓存只是加速层，缓存坏了不能让问答跟着失败。
+    """
     try:
         p = _cache_path(key)
         if not os.path.exists(p):
@@ -46,6 +52,11 @@ def _cache_get(key):
 
 
 def _cache_put(key, content):
+    """写磁盘缓存；加锁是因为 FastAPI 线程池里多个请求可能同时落到同一个 key。
+
+    失败静默：缓存属于可丢弃的加速层，宁可这一轮慢一点，也不该把写盘异常
+    抛进业务链路——用户下载/解析的成不成功不该由缓存决定。
+    """
     try:
         with _cache_lock:
             with open(_cache_path(key), "w", encoding="utf-8") as f:
@@ -249,6 +260,11 @@ def embed_texts(texts):
 
 
 def embed_text(text):
+    """单条文本向量化，是 embed_texts 的薄封装。
+
+    单独留这个入口，是让「一篇/一句」粒度的调用方不必自己拼列表、
+    也不必重复处理批量接口返回 None 的分支——降级判断只发生在 embed_texts 一处。
+    """
     emb = embed_texts([text])
     return emb[0] if emb else None
 
@@ -256,6 +272,13 @@ def embed_text(text):
 # ---------------- 各模块专用生成函数 ----------------
 
 def translate(text, source_lang=None, target_lang=None):
+    """学术翻译：语言方向由文本自身判定，用户不必先选「中译英 / 英译中」。
+
+    判据是汉字数与英文单词数的对比，而不是先问一次模型：翻译是逐页高频操作，
+    多一次模型往返的代价高于极少数判错的概率。
+    输出强制纯文本：译文要贴在多栏对照视图里，任何 Markdown 标记都会被原样显示成乱码，
+    脚注符号 ∗† 也会破坏公式对齐，所以两条都在提示词里明确禁掉。
+    """
     # 自动判定语言方向：中文为主 → 译成英文；否则（英文为主）→ 译成中文
     zh_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
     en_words = len(re.findall(r'[a-zA-Z]+', text))
@@ -272,6 +295,12 @@ def translate(text, source_lang=None, target_lang=None):
 
 
 def write_summary(papers_text):
+    """领域综述：输入是多篇论文的标题、摘要与引用关系拼成的文本。
+
+    温度取 0.4 而不是更低：综述需要把几篇的共识串成一段话，温度过低会退化成
+    「逐篇复述摘要」，读者拿不到综合判断——这正是综述与摘要列表的区别。
+    限 300 字是为了让它能整段显示在首页卡片里，不必再由前端截断。
+    """
     sys = "你是学术综述专家。"
     prompt = (
         "基于以下多篇论文的标题、摘要与引用关系，生成一段领域简短综述（300字以内），"
@@ -281,6 +310,11 @@ def write_summary(papers_text):
 
 
 def future_ideas(papers_text):
+    """未来方向：要求模型显式排除「已被解决的旧 idea」。
+
+    不加这条约束时，模型倾向直接抄摘要里的 Future Work 原句，输出看起来正确
+    但零增量；排除掉已解决项，才能逼出「站在这些论文之上还能做什么」。
+    """
     sys = "你是科研前沿分析师。"
     prompt = (
         "基于以下论文的 Future Work 与最新进展，排除已经被解决的旧 idea，"
@@ -290,6 +324,12 @@ def future_ideas(papers_text):
 
 
 def writing_framework(idea, refs_text=""):
+    """论文框架生成，References 只允许来自传入的真实文献。
+
+    框架类输出最大的风险是编造参考文献——评委随手翻两条就能发现，而且会连带
+    质疑整篇的可信度。因此把「可用文献」直接写进 prompt 并允许为空：
+    空时不编，只写正文框架、参考文献留占位，把「没依据就不写」写在提示词里而不是靠运气。
+    """
     sys = "你是学术写作专家，输出必须是真实无幻觉的内容。"
     prompt = (
         f"给定研究 idea：{idea}\n\n"
@@ -302,6 +342,11 @@ def writing_framework(idea, refs_text=""):
 
 
 def write_reading_notes(papers_text):
+    """阅读笔记：把多篇要点整理成结构化条目，供用户直接抄进自己的笔记。
+
+    与 write_summary 分开而不是共用一个函数：综述要做综合判断，
+    笔记只做整理、不替读者下结论，两者的提示词与温度取向正好相反。
+    """
     sys = "你是科研助手。"
     prompt = "请把以下文献要点整理成便于阅读的结构化笔记：\n\n" + papers_text
     return chat([{"role": "system", "content": sys}, {"role": "user", "content": prompt}], temperature=0.4)

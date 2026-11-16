@@ -35,6 +35,14 @@ def _tokenize(text):
 
 
 class VectorStore:
+    """内存向量库：稀疏 TF-IDF + Dense 双路召回，配每篇向量落盘缓存。
+
+    dense_weight 决定混合权重（0.6 → 最终分 = 稀疏分 × 0.4 + 余弦 × 0.6）。
+    之所以让向量占大头：纯 TF-IDF 对同义改写（"抗幻觉" vs "减少编造"）几乎召回不到，
+    而学术问答里语义相近比字面相同更重要；保留 0.4 的稀疏分，则是为了
+    "1706.03762"、"RRF" 这类编号与术语查询仍能精确命中——纯向量对这类 token 不敏感。
+    """
+
     def __init__(self, dense_weight=0.6):
         self.papers = {}
         self.dense_weight = dense_weight
@@ -48,6 +56,12 @@ class VectorStore:
 
     # ---------- 管理 ----------
     def add_paper(self, paper_id, title, chunks):
+        """新增一篇论文并重建索引。
+
+        _rebuild 只补算本篇向量（其余篇走内存或 .npy 缓存），所以单篇上传
+        的代价约等于本篇 chunk 数的一次 embedding 批量调用，不会因为库里
+        已有 N 篇而变成 N 倍开销——这是把向量按篇落盘换来的。
+        """
         self.papers[paper_id] = {"title": title, "chunks": chunks}
         self._rebuild()
 
@@ -59,6 +73,12 @@ class VectorStore:
         self._rebuild()
 
     def remove_paper(self, paper_id):
+        """删除一篇论文：丢弃本篇向量并重建索引。
+
+        其余篇的向量仍留在 _dense_map，_rebuild 只是重新拼接矩阵，所以删除
+        是毫秒级操作，不会触发全库重新 embedding；这也是"删论文不用重算"
+        这个体验的前提。
+        """
         self.papers.pop(paper_id, None)
         # 该篇向量直接丢弃，其余篇的向量仍在内存里，rebuild 只做拼接（毫秒级）
         self._dense_map.pop(paper_id, None)
@@ -66,6 +86,11 @@ class VectorStore:
         self._rebuild()
 
     def clear(self):
+        """清空全库，连向量缓存一起丢弃。
+
+        与 remove_paper 不同：这里连 _dense_map 都清掉，所以下一次重建必须
+        重新 embedding 全部论文，耗时随库大小线性上升。仅在调试/重置时调用。
+        """
         self.papers = {}
         self._dense_map = {}
         self._vec_failed = set()
@@ -108,6 +133,17 @@ class VectorStore:
 
     # ---------- 索引 ----------
     def _rebuild(self):
+        """重建稀疏索引，并尽量补齐 Dense 向量；补不齐就整库降级为纯稀疏。
+
+        三个刻意的设计：
+        1. 向量补齐按「内存 → 磁盘 .npy → 才调接口」三级命中，正常增删论文
+           不会产生任何网络请求；
+        2. 某篇算不出向量就记入 _vec_failed 且本进程内不再重试，避免接口抖动
+           时每次重建都白等几十秒超时；
+        3. 只要有一篇缺向量就整体降级为纯 sparse，而不是"有几篇凑几篇"。因为
+           self._dense 的行序必须与 self._flat 严格对应，拼错位会导致检索结果
+           张冠李戴——那比降级更危险，而稀疏检索本身仍然可用。
+        """
         self._flat = []
         for pid, p in self.papers.items():
             for ci, ch in enumerate(p["chunks"]):
@@ -155,6 +191,16 @@ class VectorStore:
 
     # ---------- 检索 ----------
     def search(self, query, top_k=6, scope=None):
+        """混合检索：稀疏 TF-IDF 分（0.4）与 Dense 余弦（0.6）加权，再按 RRF 定序。
+
+        返回带 论文 / 页码 锚点的 top_k 片段，供 verify 做逐句回查。
+        scope 限定只在指定论文集合内检索（前端"仅本问"勾选多篇时传入 paper_ids）。
+
+        关键取舍：score 保留 0~1 的混合分，但排序用 RRF 名次。
+        如果直接按 RRF 原始分排序（1/(60+rank) 量级，约 0.0167），
+        下游 _confidence(0.5/0.3/0.22) 与去重阈值(0.35) 会全部失效；
+        所以只把 RRF 当"排序键"，分数照旧给下游做阈值判断。
+        """
         q_terms = _tokenize(query)
         q_vec = Counter(q_terms)
 

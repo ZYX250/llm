@@ -36,6 +36,14 @@ _CACHE_TTL = 600  # 10 分钟内同一查询直接复用，避免重复等待
 
 
 def search(query, max_results=10):
+    """检索 arXiv，同参数 10 分钟内直接复用结果。
+
+    缓存只放在进程内，不接 llm 那套磁盘缓存：检索结果时效性强，
+    跨进程复用在重启后会把旧结果当成新结果，而 10 分钟刚好覆盖
+    「演示中反复调整关键词」这一段时间。
+    sortBy 固定 relevance 而非 submittedDate：本模块的用途是「与我的主题最接近」，
+    不是「最近提交了什么」——按时间排会把不相关的新论文顶到前面。
+    """
     key = ((query or "").strip().lower(), max_results)
     hit = _CACHE.get(key)
     if hit and time.time() - hit[0] < _CACHE_TTL:

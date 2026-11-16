@@ -17,10 +17,20 @@ plt.rcParams["axes.unicode_minus"] = False
 
 
 def read_csv(text):
+    """把前端上传的 CSV 文本直接读进 DataFrame。
+
+    走 io.StringIO 而不是先落盘：图表请求是一次性的，落盘要多一次磁盘 IO
+    和一套清理责任，而项目本来就不保留用户上传的中间文件——
+    内存里读掉，请求结束即释放。
+    """
     return pd.read_csv(io.StringIO(text))
 
 
 def _to_b64(fig):
+    """图存成 base64 PNG。dpi=110 + bbox_inches=tight 是清晰度与体积的折中：
+    再高一档体积近乎翻倍，而图表在页面上只占一栏宽，肉眼看不出差别。
+    存完立刻 plt.close：长时间运行的服务端不关图句柄会持续涨内存。
+    """
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
     plt.close(fig)
@@ -29,6 +39,12 @@ def _to_b64(fig):
 
 
 def make_chart(text, kind="line", x_col=None, y_col=None):
+    """按 kind 画折线/柱状/散点；列名缺省时自动挑选，不让用户先填表单。
+
+    挑选规则是「第一个数值列做 y、第一个类别列做 x」：用户丢进来的 CSV 往往
+    没有表头约定，如果强制要求指定列名，点一次按钮就会变成填一次表单。
+    结果统一回 base64 PNG，前端不必为图表再开一条图片路由，服务端也不留文件。
+    """
     df = read_csv(text)
     num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     cat_cols = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
@@ -86,6 +102,11 @@ def make_radar3d(text, y_col=None):
 
 
 def make_table(text):
+    """把 CSV 前 30 行转成 HTML 表格，供前端直接渲染预览。
+
+    截断到 30 行是必要的：实验数据动辄上千上万行，整表转 HTML 会让浏览器
+    卡住好几秒；而预览的作用只是让用户核对「选对列了没有」，不需要全量。
+    """
     df = read_csv(text)
     return df.head(30).to_html(classes="viz-table", border=0, index=False)
 

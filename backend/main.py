@@ -50,6 +50,12 @@ SESSIONS = {}      # session_id -> [messages]  Agent 会话记忆
 
 @asynccontextmanager
 async def lifespan(_app):
+    """启动/关闭钩子，只放毫秒级的事。
+
+    读盘恢复是同步的（数据量小、必须有），向量重建必须扔给后台线程：
+    否则端口已在监听但应用还没 ready，前端代理会直接报 ECONNREFUSED——
+    这个坑是实测踩到过的，不是理论风险。
+    """
     load_state()   # 只读盘，毫秒级
     _load_sessions()
     threading.Thread(target=_restore_vectors, daemon=True).start()   # 向量库后台重建
@@ -128,6 +134,8 @@ def _save_paper(pid):
 
 
 def _save_meta():
+    """把论文元数据写盘。失败只打印不抛：元数据可以靠目录里的 parse.json 重建，
+    但让一次保存失败把整个上传请求打挂，代价远大于丢掉一次元数据快照。"""
     try:
         with open(META_PATH, "w", encoding="utf-8") as f:
             json.dump(papers_meta, f, ensure_ascii=False)
@@ -281,6 +289,11 @@ async def reparse_paper(pid: str):
 
 @app.delete("/papers/{pid}")
 def delete_paper(pid: str):
+    """删除一篇论文：元数据、向量索引、解析缓存、任务状态四份一起清，最后删目录。
+
+    顺序是先清内存再删目录：目录删失败时内存里已经没有它，
+    重启也不会因为残留的 parse.json 又「复活」出一篇没有索引的论文。
+    """
     papers_meta.pop(pid, None)
     vs.remove_paper(pid)
     CACHE.pop(pid, None)
@@ -294,6 +307,12 @@ def delete_paper(pid: str):
 
 @app.get("/papers/{pid}/parse")
 def paper_parse(pid: str):
+    """返回解析结构（标题树/表格/公式/参考文献），供前端「解析详情」页签使用。
+
+    headings 截到 200 条：真实论文的小节标题很少超过这个量，超长列表会让
+    前端渲染卡顿；公式单列 formula_pages 透传，因为公式文本本身没法定位，
+    页码才是「点一下跳回原文」的依据。
+    """
     p = papers_meta.get(pid)
     parse = CACHE.get(pid)
     if not p or not parse:
@@ -528,6 +547,12 @@ def _expand_retrieval(query, scope=None, top_k=6):
 
 @app.post("/qa")
 def qa(body: QABody):
+    """同步问答：检索 → 拼编号上下文 → 生成 → 程序校验 → 分级。
+
+    与 /qa/stream 共用同一条链路，差别只在「怎么把结果交出去」。保留同步版
+    是因为 Agent 内部把 rag_qa 当工具调用时必须拿到完整字符串，
+    没法去消费一个流——这是同步版存在的唯一理由，不是历史遗留。
+    """
     scope = body.paper_ids or None
     hits = _expand_retrieval(body.query, scope=scope, top_k=body.top_k)
     if not hits:
@@ -596,6 +621,11 @@ class TranslateBody(BaseModel):
 
 @app.post("/translate")
 def translate(body: TranslateBody):
+    """翻译接口。业务失败返回 ok:False 而不是抛 HTTP 错误：
+
+    前端对这两个分支的展示方式相同，但 ok 字段让它能区分「调用失败」
+    和「译出来确实是空」——后者不该显示成错误红字。
+    """
     try:
         out = llm.translate(body.text, body.source, body.target)
         return {"ok": True, "translated": out}
@@ -606,6 +636,11 @@ def translate(body: TranslateBody):
 # ---------------- 模块四：论文检索 / 追踪 ----------------
 @app.get("/search/arxiv")
 def search_arxiv(q: str, max_results: int = 8):
+    """arXiv 检索，并用本地库标题给每条结果补推荐理由。
+
+    本地库为空时理由会退化成「主题匹配度一般」，这是有意接受的：
+    检索本身不依赖本地库，不该因为还没上传论文就把整个模块锁死。
+    """
     try:
         items = arxiv_engine.search(q, max_results=max_results)
         local_titles = [p["title"] for p in papers_meta.values()]
@@ -641,6 +676,12 @@ def arxiv_pdf(id: str = Query(..., description="arXiv 编号，如 2201.00978v1"
 # ---------------- 模块五：引用图谱 + 综述 ----------------
 @app.get("/graph")
 def get_graph():
+    """组装图谱输入：标题 + 参考文献文本，交给 graph_engine 建两类边。
+
+    引用关系用 CACHE.get(pid, {}) 逐个取而不是直接索引：某篇解析残缺时
+    按「没有参考文献」处理，而不是让 KeyError 把整张图带崩——
+    图谱的价值在于看全局，不该被一篇坏数据绑架。
+    """
     if not papers_meta:
         return {"ok": True, "empty": True, "nodes": [], "links": []}
     papers = []
@@ -658,6 +699,11 @@ class SummaryBody(BaseModel):
 
 @app.post("/graph/summary")
 def graph_summary(body: SummaryBody):
+    """领域综述 + 未来方向，两段共用同一份摘要文本。
+
+    摘要只截前 600 字：多篇拼起来后 prompt 会迅速膨胀，而综述真正需要的
+    是「这篇在做什么」，不是实验细节和数字——把预算留给「哪几篇在同一个脉络上」。
+    """
     scope = body.scope
     texts = []
     for pid in (scope or list(papers_meta)):
@@ -683,6 +729,12 @@ class FrameworkBody(BaseModel):
 
 @app.post("/writing/framework")
 def writing_framework(body: FrameworkBody):
+    """论文框架：每篇论文只取前 10 条参考文献作为「可引用池」。
+
+    截断不是省 token 的将就：参考文献列表动辄四五十条，全塞进去会挤掉
+    正文框架的生成预算，模型反而开始复述条目。10 条足够让它学到这个领域的
+    引用风格，又不至于逼它硬凑满引用——凑引用正是编造参考文献的起点。
+    """
     refs_text = "\n".join(
         f"- {r['text']}" for pid in papers_meta
         for r in (CACHE.get(pid, {}).get("references", [])[:10])
@@ -696,6 +748,11 @@ def writing_framework(body: FrameworkBody):
 
 @app.post("/viz/csv")
 async def viz_csv(file: UploadFile = File(...), kind: str = Form("line"), x_col: str = Form(""), y_col: str = Form("")):
+    """CSV → 图表 + HTML 预览表 + 学术图注，一次请求返回三件东西。
+
+    三者一起返回是因为它们描述的是同一份数据：拆成三个请求会让前端出现
+    「图已经画出来、图注还在转圈」的中间态，而且用户改一次列名要发三次请求。
+    """
     text = (await file.read()).decode("utf-8", errors="replace")
     try:
         if kind == "radar3d":
@@ -711,6 +768,13 @@ async def viz_csv(file: UploadFile = File(...), kind: str = Form("line"), x_col:
 
 @app.post("/writing/topology")
 def topology(kind: str = Form("mermaid"), prompt: str = Form("")):
+    """生成 TikZ / Mermaid / Graphviz 拓扑脚本。
+
+    system prompt 里写死「只输出脚本、不要解释」：模型默认会先说一句
+    「以下是为你生成的脚本」，而前端把整块文本当脚本复制进绘图工具，
+    那句开场白直接变成语法错误——这类失败看起来像绘图工具的问题，
+    实际是提示词没约束住。
+    """
     sys = "你是架构绘图专家，只输出合法的绘图脚本，不要任何解释文字。"
     p = f"根据描述生成 {kind} 架构/拓扑图脚本：\n{prompt}"
     try:
@@ -766,6 +830,14 @@ def _readable_papers():
 
 
 def _run_tool(tool, query):
+    """工具名的唯一分发点：把 Agent 选中的工具映射到具体能力函数。
+
+    用 if/elif 而不是「名字 → 函数」的注册表：每个工具的参数与返回形状都不同
+    （rag_qa 要 QABody、dedup 返回 duplicates、read_translate 返回 papers），
+    注册表最后仍要在每个分支里做一次适配，反而多一层看不懂的间接。
+    这里同时也是唯一知道「什么该回给模型看」的地方——所以 dedup 返回的是
+    人话 note 而不是整份重复对列表。
+    """
     if tool == "rag_qa":
         return qa(QABody(query=query))
     if tool == "arxiv_search":
@@ -795,6 +867,12 @@ def _run_tool(tool, query):
 
 @app.post("/agent/chat")
 def agent_chat(body: AgentBody):
+    """Agent 同步入口：执行完整计划后一次性返回（含每一步的状态）。
+
+    会话记忆只追加「用户问题 + 最终回答」，中间的工具步骤与检索原文不进历史：
+    否则下一轮 context 会被上一轮几十段原文占满，模型既看不见新问题，
+    也会把这些原文当成自己之前说过的话。
+    """
     hist = SESSIONS.get(body.session_id, [])
     steps, result = agent.run_plan(body.query, history=hist, run_tool=_run_tool)
     plan = result.get("plan") or []
@@ -867,6 +945,12 @@ def research_roadmap(body: RoadmapBody):
 
 @app.get("/reviewer/info")
 def reviewer_info(_ok: None = Depends(require_reviewer)):
+    """评审模式总览：把评委要核的数一次给全（RRF 参数、检索规模、校验策略）。
+
+    字段名刻意起成 dense_weight_only_for_score 这种长名，是因为「dense 权重
+    只参与打分、不参与排序」是这套实现里最容易被误读的一点——
+    写在字段名上，比写在文档里更难被忽略。
+    """
     return {
         "ok": True,
         "papers": len(papers_meta),
@@ -929,6 +1013,11 @@ def reviewer_graph(_ok: None = Depends(require_reviewer)):
 
 @app.get("/")
 def root():
+    """健康检查：论文数、评审模式是否启用、缓存条目数一次暴露。
+
+    给部署脚本和评委现场用 curl 直接验证服务活着（返回 200 且 papers 与前端
+    显示一致），比打开页面用眼睛确认更可信——页面可能只是缓存。
+    """
     return {"app": "科研助手 Agent 系统", "status": "running", "papers": len(papers_meta),
             "reviewer_mode": bool(REVIEWER_TOKEN),
             "cached": len(os.listdir(llm.CACHE_DIR)) if os.path.exists(llm.CACHE_DIR) else 0}

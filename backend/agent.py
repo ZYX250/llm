@@ -43,6 +43,12 @@ TOOL_ACTION = {
 
 
 def _tool_desc(name):
+    """按名字在 TOOLS 里取描述。
+
+    注册表保持 list 而不是 dict：/agent/tools 要按业务顺序展示六个模块，
+    dict 的键序在跨版本不保证；n 只有 7，线性查找的代价可以忽略，
+    换来的是「一处定义、两处复用」（schema 与对外清单）而不必维护两份。
+    """
     for t in TOOLS:
         if t["name"] == name:
             return t["desc"]
@@ -91,6 +97,11 @@ MAX_ROUNDS = 3   # ReAct 最多循环轮数，防止工具之间互相触发造�
 
 
 def _plan_of(steps):
+    """把执行过的步骤转成前端展示用的 plan（步骤号从 1 开始）。
+
+    单独抽出来是因为「正常收敛」与「轮数用尽/异常兜底」两条路径都要产出
+    同一种结构；前端只认一种形状，不必再判断这条 plan 是真实调用还是兜底生成。
+    """
     return [{"step": f"步骤{i + 1}", "tool": s["tool"], "action": s["action"]}
             for i, s in enumerate(steps)]
 
@@ -214,4 +225,10 @@ def plan_agent(query):
 
 
 def describe_tools():
+    """对外工具清单：给 /agent/tools 与前端「能力介绍」用。
+
+    特意不直接返回 TOOLS 本体：module 字段对模型没有意义（schema 里已剔除），
+    但对前端有用——回答完之后要提示用户「去哪个模块查看」，
+    所以这层投影是给两种消费者各取所需，而不是图省事暴露内部结构。
+    """
     return [{"name": t["name"], "module": t["module"], "desc": t["desc"]} for t in TOOLS]
