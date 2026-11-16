@@ -1,12 +1,29 @@
-fastapi
-uvicorn
-python-dotenv
-requests
-python-multipart
-pymupdf
-numpy
-networkx
-pandas
-matplotlib
-rapidocr-onnxruntime
-onnxruntime
+# 依赖版本取自 2026-11-16 的 backend/.venv（pip freeze 实测），
+# 与代码实际 import 的直接依赖一一对应；间接依赖交给 pip 自行解析。
+
+# Web 服务（main.py：FastAPI 路由 / 上传表单 / 请求校验模型）
+fastapi==0.143.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+pydantic==2.14.0
+
+# 配置与外部 HTTP（llm.py 读 .env、调 DashScope HTTP 接口；arxiv_engine.py 抓 arXiv）
+python-dotenv==1.2.4
+requests==2.34.2
+
+# PDF 解析与 OCR（pdf_parser.py）
+pymupdf==1.28.2
+pillow==12.3.0
+rapidocr-onnxruntime==1.4.4
+onnxruntime==1.31.0
+
+# 检索与计算（vectorstore.py / graph_engine.py / viz_engine.py）
+numpy==2.4.6
+networkx==3.6.1
+pandas==3.0.6
+
+# 可视化（viz_engine.py：matplotlib 生成图表）
+matplotlib==3.11.2
+
+# 测试（README 中的 pytest 24 例）
+pytest==9.2.0
