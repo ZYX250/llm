@@ -34,8 +34,10 @@ $excludeFilePatterns = @(".env", "*.old", "*.pyc", "*.log", "ngrok.exe", "*.zip"
 # 根目录的技术文档按扩展名排除：不依赖中文文件名，5.1/7.x 行为一致
 $ROOT_DOC_EXTS = @(".docx", ".doc", ".pdf")
 
-# 额外的单个文件（默认不进包）
-$alwaysExcludeFileNames = @("reviewer_access.txt", "ngrok_launch.bat")   # 含真实令牌 / 与提交无关
+# 额外的单个文件（任何情况下都不进包，包括 -IncludeNotes）
+# DEMO_VIDEO_SCRIPT.md 是内部拍摄脚本，含「应急预案/预置答案/静态截图」等录制期话术，
+# 一旦随包交给评委，会被误读为「演示非实时运行」，属于交付风险，必须排除。
+$alwaysExcludeFileNames = @("reviewer_access.txt", "ngrok_launch.bat", "DEMO_VIDEO_SCRIPT.md")   # 含真实令牌 / 与提交无关 / 内部拍摄脚本
 $excludeFileNames = @("修改建议_评委反馈.md")
 if ($IncludeNotes) { $excludeFileNames = @() }
 
@@ -105,7 +107,7 @@ try {
             $name = ($e.FullName -split '/')[-1]
             $full = $e.FullName
             if ($name -eq ".env" -or $name -eq "ngrok.exe" -or $name -like "*.old") { $bad += $full }
-            if ($name -eq "reviewer_access.txt" -or $name -like "*.log" -or $name -eq "ngrok_launch.bat") { $bad += $full }
+            if ($name -eq "reviewer_access.txt" -or $name -like "*.log" -or $name -eq "ngrok_launch.bat" -or $name -eq "DEMO_VIDEO_SCRIPT.md") { $bad += $full }
             if ($full -match "(^|/)(\.venv|node_modules|\.git|\.cache|chroma_db)/") { $bad += $full }
         }
         $entryCount = $zip.Entries.Count
